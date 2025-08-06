@@ -1,67 +1,41 @@
 import streamlit as st
-import math
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="📦 Paletten Fuchs – V2.1", layout="centered")
-st.title("🦊 Paletten Fuchs – Ladeplan Sattelzug")
+st.set_page_config(page_title="🦊 Paletten Fuchs – Version 3", layout="centered")
+st.title("🦊 Paletten Fuchs – Ladeplan für Sattelzug")
 
-# 🚛 Trailergröße
-trailer_length = 1360  # cm
-trailer_width = 245    # cm
-
-# 📦 Vordefinierte Palettentypen
-paletten_typen = {
-    "Euro (120x80)": (120, 80),
-    "Industrie (120x100)": (120, 100),
-    "Blumenwagen (135x55)": (135, 55),
-    "Benutzerdefiniert": (0, 0)
-}
-
-# 🔢 Eingabe mehrerer Palettentypen
-st.markdown("### ➕ Palettentypen eingeben")
-
-palette_daten = []
-typ_farben = ["#8ecae6", "#90be6d", "#f4a261", "#e76f51", "#b5838d"]
-
-for idx in range(3):
-    with st.expander(f"🔹 Palettentyp {idx + 1}"):
-        aktiv = st.checkbox("Aktivieren", value=(idx == 0), key=f"aktiv_{idx}")
-        if aktiv:
-            pal_typ = st.selectbox(f"Palettentyp auswählen", list(paletten_typen.keys()), key=f"typ_{idx}")
-            default_l, default_b = paletten_typen[pal_typ]
-
-            if pal_typ == "Benutzerdefiniert":
-                pal_l = st.number_input("Länge (cm)", min_value=50, max_value=200, value=120, key=f"l_{idx}")
-                pal_b = st.number_input("Breite (cm)", min_value=50, max_value=150, value=80, key=f"b_{idx}")
-            else:
-                pal_l = default_l
-                pal_b = default_b
-                st.markdown(f"📏 Maße: **{pal_l} × {pal_b} cm**")
-
-            anzahl = st.number_input("Anzahl", min_value=1, max_value=40, value=10, key=f"a_{idx}")
-            gewicht = st.number_input("Gewicht je Palette (kg)", min_value=0, max_value=2000, value=150, key=f"g_{idx}")
-            richtung = st.radio("Ausrichtung", ["Längs (Längsseite nach vorne)", "Quer (Breitseite nach vorne)"], key=f"r_{idx}")
-            if richtung == "Quer":
-                pal_l, pal_b = pal_b, pal_l
-
-            palette_daten.append({
-                "name": pal_typ,
-                "l": pal_l,
-                "b": pal_b,
-                "anzahl": anzahl,
-                "gewicht": gewicht,
-                "farbe": typ_farben[idx % len(typ_farben)]
-            })
-
-# 🧠 Belegung berechnen
-st.markdown("### 🗺️ Ladeplan (Draufsicht)")
-
-grid_cols = trailer_length
-grid_rows = trailer_width
-
+# 🚛 Trailergröße in cm
+trailer_length = 1360
+trailer_width = 245
 cm_per_cell = 10
 cells_x = trailer_length // cm_per_cell
 cells_y = trailer_width // cm_per_cell
+
+# 📦 Palettentypen fix
+paletten_typen = [
+    {"name": "Euro", "l": 120, "b": 80, "farbe": "#8ecae6"},
+    {"name": "Industrie", "l": 120, "b": 100, "farbe": "#90be6d"},
+    {"name": "Blumenwagen", "l": 135, "b": 55, "farbe": "#f4a261"},
+    {"name": "Benutzerdefiniert", "l": 120, "b": 80, "farbe": "#e76f51"},
+]
+
+st.markdown("### 📥 Eingabe pro Palettentyp")
+
+for typ in paletten_typen:
+    cols = st.columns([1.5, 1, 1, 1])
+    with cols[0]:
+        st.markdown(f"**{typ['name']}**")
+    if typ["name"] == "Benutzerdefiniert":
+        typ["l"] = st.number_input("Länge", min_value=50, max_value=200, value=typ["l"], key=typ["name"] + "_l")
+        typ["b"] = st.number_input("Breite", min_value=50, max_value=150, value=typ["b"], key=typ["name"] + "_b")
+    else:
+        st.markdown(f"{typ['l']} × {typ['b']} cm")
+    with cols[2]:
+        typ["anzahl"] = st.number_input("Anzahl", min_value=0, max_value=50, value=0, key=typ["name"] + "_anzahl")
+    with cols[3]:
+        typ["gewicht"] = st.number_input("kg/Stk", min_value=0, max_value=2000, value=150, key=typ["name"] + "_gewicht")
+
+# 🧮 Raster initialisieren
 belegung = [[None for _ in range(cells_x)] for _ in range(cells_y)]
 
 def finde_freien_platz(pal_l, pal_b):
@@ -81,15 +55,15 @@ def finde_freien_platz(pal_l, pal_b):
                 return x, y
     return None, None
 
+# 📦 Platzieren
 log = []
 gesamtgewicht = 0
-
-for typ in palette_daten:
+for typ in paletten_typen:
     geladen = 0
-    for i in range(int(typ["anzahl"])):
+    for _ in range(int(typ["anzahl"])):
         x0, y0 = finde_freien_platz(typ["l"], typ["b"])
         if x0 is None:
-            log.append(f"❌ Kein Platz mehr für {typ['name']} Nr. {i+1}")
+            log.append(f"❌ Kein Platz mehr für {typ['name']}")
             break
         else:
             pal_x = typ["l"] // cm_per_cell
@@ -99,21 +73,24 @@ for typ in palette_daten:
                     belegung[y0 + dy][x0 + dx] = typ["farbe"]
             geladen += 1
             gesamtgewicht += typ["gewicht"]
-    log.append(f"✅ {geladen}× {typ['name']} geladen.")
+    if geladen > 0:
+        log.append(f"✅ {geladen}× {typ['name']} geladen")
 
-# 📊 Visualisierung
-html = "<div style='display: grid; grid-template-columns: " + " ".join(["10px"] * cells_x) + "; gap:1px;'>"
+# 🗺️ Anzeige
+st.markdown("### 🗺️ Ladeplan (Draufsicht – vorne → hinten)")
+
+html = "<div style='display: grid; grid-template-columns: " + " ".join(["10px"] * cells_x) + "; gap:1px; border: 2px solid #444;'>"
 for row in belegung:
     for zelle in row:
-        farbe = zelle if zelle else "#ddd"
-        html += f"<div style='background-color:{farbe}; width:10px; height:10px; border: 1px solid #aaa;'></div>"
+        farbe = zelle if zelle else "#eee"
+        html += f"<div style='background-color:{farbe}; width:10px; height:10px; border:1px solid #aaa;'></div>"
 html += "</div>"
 
 components.html(html, height=500, scrolling=True)
 
 # 📦 Zusammenfassung
-st.markdown("### 📦 Zusammenfassung")
+st.markdown("### 📦 Übersicht")
 for eintrag in log:
     st.write(eintrag)
-st.write(f"📏 Ladefläche: {trailer_length}×{trailer_width} cm")
-st.write(f"⚖️ Gesamtgewicht: {gesamtgewicht:.1f} kg")
+st.write(f"📏 Ladefläche: {trailer_length} × {trailer_width} cm")
+st.write(f"⚖️ Gesamtgewicht: {gesamtgewicht:.1f} kg")
