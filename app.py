@@ -2,12 +2,20 @@ import streamlit as st
 import math
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="📦 Ladeplan – Version 2", layout="centered")
-st.title("📦 Ladeplan Sattel – Mehrere Palettentypen")
+st.set_page_config(page_title="📦 Paletten Fuchs – V2.1", layout="centered")
+st.title("🦊 Paletten Fuchs – Ladeplan Sattelzug")
 
 # 🚛 Trailergröße
 trailer_length = 1360  # cm
 trailer_width = 245    # cm
+
+# 📦 Vordefinierte Palettentypen
+paletten_typen = {
+    "Euro (120x80)": (120, 80),
+    "Industrie (120x100)": (120, 100),
+    "Blumenwagen (135x55)": (135, 55),
+    "Benutzerdefiniert": (0, 0)
+}
 
 # 🔢 Eingabe mehrerer Palettentypen
 st.markdown("### ➕ Palettentypen eingeben")
@@ -15,21 +23,29 @@ st.markdown("### ➕ Palettentypen eingeben")
 palette_daten = []
 typ_farben = ["#8ecae6", "#90be6d", "#f4a261", "#e76f51", "#b5838d"]
 
-for idx in range(3):  # max. 3 Typen für diese Version
+for idx in range(3):
     with st.expander(f"🔹 Palettentyp {idx + 1}"):
-        aktiv = st.checkbox("Aktivieren", value=(idx == 0), key=f"aktiv_{idx}")  # ✅ repariert mit eindeutigem key
+        aktiv = st.checkbox("Aktivieren", value=(idx == 0), key=f"aktiv_{idx}")
         if aktiv:
-            typ_name = st.text_input(f"Name Typ {idx + 1}", value=f"Typ {idx + 1}", key=f"name_{idx}")
-            pal_l = st.number_input(f"Länge (cm) – {typ_name}", min_value=50, max_value=200, value=120, key=f"l_{idx}")
-            pal_b = st.number_input(f"Breite (cm) – {typ_name}", min_value=50, max_value=150, value=80, key=f"b_{idx}")
-            anzahl = st.number_input(f"Anzahl – {typ_name}", min_value=1, max_value=40, value=10, key=f"a_{idx}")
-            gewicht = st.number_input(f"Gewicht je Palette (kg) – {typ_name}", min_value=0, max_value=2000, value=150, key=f"g_{idx}")
-            richtung = st.radio(f"Ausrichtung – {typ_name}", ["Längs (Längsseite nach vorne)", "Quer (Breitseite nach vorne)"], key=f"r_{idx}")
+            pal_typ = st.selectbox(f"Palettentyp auswählen", list(paletten_typen.keys()), key=f"typ_{idx}")
+            default_l, default_b = paletten_typen[pal_typ]
+
+            if pal_typ == "Benutzerdefiniert":
+                pal_l = st.number_input("Länge (cm)", min_value=50, max_value=200, value=120, key=f"l_{idx}")
+                pal_b = st.number_input("Breite (cm)", min_value=50, max_value=150, value=80, key=f"b_{idx}")
+            else:
+                pal_l = default_l
+                pal_b = default_b
+                st.markdown(f"📏 Maße: **{pal_l} × {pal_b} cm**")
+
+            anzahl = st.number_input("Anzahl", min_value=1, max_value=40, value=10, key=f"a_{idx}")
+            gewicht = st.number_input("Gewicht je Palette (kg)", min_value=0, max_value=2000, value=150, key=f"g_{idx}")
+            richtung = st.radio("Ausrichtung", ["Längs (Längsseite nach vorne)", "Quer (Breitseite nach vorne)"], key=f"r_{idx}")
             if richtung == "Quer":
                 pal_l, pal_b = pal_b, pal_l
 
             palette_daten.append({
-                "name": typ_name,
+                "name": pal_typ,
                 "l": pal_l,
                 "b": pal_b,
                 "anzahl": anzahl,
