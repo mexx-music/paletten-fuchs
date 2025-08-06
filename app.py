@@ -17,9 +17,9 @@ typ_farben = ["#8ecae6", "#90be6d", "#f4a261", "#e76f51", "#b5838d"]
 
 for idx in range(3):  # max. 3 Typen für diese Version
     with st.expander(f"🔹 Palettentyp {idx + 1}"):
-        aktiv = st.checkbox(f"Aktivieren", value=(idx == 0))
+        aktiv = st.checkbox("Aktivieren", value=(idx == 0), key=f"aktiv_{idx}")  # ✅ repariert mit eindeutigem key
         if aktiv:
-            typ_name = st.text_input(f"Name Typ {idx + 1}", value=f"Typ {idx + 1}")
+            typ_name = st.text_input(f"Name Typ {idx + 1}", value=f"Typ {idx + 1}", key=f"name_{idx}")
             pal_l = st.number_input(f"Länge (cm) – {typ_name}", min_value=50, max_value=200, value=120, key=f"l_{idx}")
             pal_b = st.number_input(f"Breite (cm) – {typ_name}", min_value=50, max_value=150, value=80, key=f"b_{idx}")
             anzahl = st.number_input(f"Anzahl – {typ_name}", min_value=1, max_value=40, value=10, key=f"a_{idx}")
