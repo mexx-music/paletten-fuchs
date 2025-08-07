@@ -1,60 +1,74 @@
 
 import streamlit as st
 import math
-
-st.set_page_config(page_title="🟧 Paletten Fuchs – Ladeplan", layout="wide")
-
-st.title("🟧 Paletten Fuchs – Ladeflächenplaner für Sattelzug")
-
-# Ladeflächengröße (innen): ca. 13.6m x 2.45m → 1360 x 245 cm
-LKW_LAENGE_CM = 1360
-LKW_BREITE_CM = 245
-
-PALETTEN_TYPEN = {
-    "Euro-Palette (120×80)": (120, 80),
-    "Industriepalette (120×100)": (120, 100),
-    "Blumenwagen (67×135)": (67, 135),
-    "Benutzerdefiniert": None
-}
-
-st.sidebar.header("📦 Paletten-Einstellungen")
-palettentyp = st.sidebar.selectbox("Palettentyp wählen", list(PALETTEN_TYPEN.keys()))
-
-if palettentyp == "Benutzerdefiniert":
-    pal_laenge = st.sidebar.number_input("Länge (cm)", min_value=50, max_value=300, value=120)
-    pal_breite = st.sidebar.number_input("Breite (cm)", min_value=50, max_value=150, value=80)
-else:
-    pal_laenge, pal_breite = PALETTEN_TYPEN[palettentyp]
-
-anzahl = st.sidebar.number_input("Anzahl Paletten", min_value=1, max_value=66, value=33)
-
-# Optional Gewichtseingabe
-show_gewicht = st.sidebar.checkbox("Gewicht eingeben")
-gewicht = None
-if show_gewicht:
-    gewicht = st.sidebar.number_input("Gewicht pro Palette (kg)", min_value=1, max_value=1500, value=500)
-
-# Berechnung: Wieviele Paletten passen in eine Reihe (nebeneinander)?
-pal_pro_reihe = math.floor(LKW_BREITE_CM / pal_breite)
-pal_reihen = math.ceil(anzahl / pal_pro_reihe)
-
-st.subheader(f"🔢 Palettenanzeige ({anzahl} Stück) – {pal_pro_reihe} pro Reihe")
-
-# Zeichnen
 import streamlit.components.v1 as components
 
-html = "<div style='display: grid; grid-template-columns: repeat(" + str(pal_pro_reihe) + ", 1fr); gap: 2px; width: 100%; max-width: 800px; margin: auto;'>"
+st.set_page_config(page_title="🟧 Paletten Fuchs – Multi-Paletten-Planung", layout="wide")
+st.title("🟧 Paletten Fuchs – Ladeplan mit mehreren Palettentypen")
 
-for i in range(anzahl):
-    html += "<div style='background:#FFA500AA; border:1px solid #333; height:40px; text-align:center; font-size:10px;'>P" + str(i+1) + "</div>"
+# Ladeflächengröße
+LKW_BREITE_CM = 245
 
-html += "</div><br><br>"
-components.html(html, height=pal_reihen * 45 + 50)
+# Definition der Palettentypen
+PALETTEN_TYPEN = {
+    "Euro-Palette (120×80)": {"maße": (120, 80), "symbol": "▭", "farbe": "#FFA500"},
+    "Industriepalette (120×100)": {"maße": (120, 100), "symbol": "▯", "farbe": "#FF5733"},
+    "Blumenwagen (135×67)": {"maße": (135, 67), "symbol": "⬜", "farbe": "#8E44AD"},
+    "Benutzerdefiniert": {"maße": None, "symbol": "⚙️", "farbe": "#3498DB"}
+}
 
-# Zusatzanzeige
+st.sidebar.header("📦 Palettentypen auswählen & Anzahl eingeben")
+
+paletten_eingaben = []
+
+# Gewicht allgemein aktivierbar
+show_gewicht = st.sidebar.checkbox("⚖️ Gewichtseingabe aktivieren")
+
+for typ, daten in PALETTEN_TYPEN.items():
+    aktiv = st.sidebar.checkbox(f"{daten['symbol']} {typ}", key=typ)
+    if aktiv:
+        if typ == "Benutzerdefiniert":
+            laenge = st.sidebar.number_input(f"↔️ Länge {typ} (cm)", 50, 300, 120, key=f"{typ}_l")
+            breite = st.sidebar.number_input(f"↕️ Breite {typ} (cm)", 50, 150, 80, key=f"{typ}_b")
+        else:
+            laenge, breite = daten["maße"]
+
+        anzahl = st.sidebar.number_input(f"Anzahl – {typ}", 1, 66, 10, key=f"{typ}_anzahl")
+
+        gewicht = None
+        if show_gewicht:
+            gewicht = st.sidebar.number_input(f"Gewicht pro Palette (kg) – {typ}", 1, 1500, 500, key=f"{typ}_gewicht")
+
+        paletten_eingaben.append({
+            "typ": typ,
+            "symbol": daten["symbol"],
+            "farbe": daten["farbe"],
+            "laenge": laenge,
+            "breite": breite,
+            "anzahl": anzahl,
+            "gewicht": gewicht
+        })
+
+# Anzeige vorbereiten
+st.subheader("📊 Ladeflächenansicht")
+
+html = "<div style='width:100%; max-width:850px; margin:auto; display:flex; flex-wrap:wrap; gap:4px;'>"
+
+for pal in paletten_eingaben:
+    pro_reihe = max(1, math.floor(LKW_BREITE_CM / pal["breite"]))
+    reihen = math.ceil(pal["anzahl"] / pro_reihe)
+
+    for i in range(pal["anzahl"]):
+        html += f"<div title='{pal['typ']} P{i+1}' style='background:{pal['farbe']}; border:1px solid #333; width:80px; height:40px; text-align:center; font-size:11px; line-height:40px;'>{pal['symbol']} {i+1}</div>"
+
+html += "</div><br>"
+
+components.html(html, height=600)
+
+# Gesamtgewicht anzeigen
 if show_gewicht:
-    gesamt = anzahl * gewicht
-    st.info(f"🔩 Gesamtgewicht: {gesamt:,} kg")
+    gesamt = sum(p["anzahl"] * p["gewicht"] for p in paletten_eingaben if p["gewicht"])
+    st.info(f"🔩 Gesamtgewicht aller Paletten: {gesamt:,} kg")
 
 st.markdown("---")
-st.markdown("📏 Maßstabsgerechte Darstellung folgt in Vollversion.")
+st.markdown("🔧 Darstellung symbolisch – Maßstab folgt in nächster Version.")
