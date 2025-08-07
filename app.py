@@ -9,7 +9,7 @@ TRAILER_W = 245   # cm
 cm_per_cell = st.sidebar.slider("Raster (cm/Zelle)", 10, 60, 20, 5)
 X = TRAILER_L // cm_per_cell  # Länge in Zellen
 Y = TRAILER_W // cm_per_cell  # Breite in Zellen
-EM = " "  # \u2003 em-space für saubere Abstände
+EM = " "  # \u2003 em-space
 
 st.caption(f"Raster: {X} × {Y} Zellen (je {cm_per_cell} cm)")
 
@@ -20,237 +20,192 @@ PAL = {
     "Blumenwagen":{"L":135, "B":55,  "sym_q":"▣", "sym_l":"▣"},
 }
 
-# ---------- UI: nur Paletten-Art + Anzahl ----------
-st.markdown("### 📥 Ladung")
-col1,col2,col3,col4 = st.columns([1.2,1.2,1.2,1.6])
-with col1:
-    n_euro = st.number_input("Euro (120×80)", 0, 40, 30)
-with col2:
-    n_ind  = st.number_input("Industrie (120×100)", 0, 40, 0)
-with col3:
-    show_flowers = st.checkbox("Blumenwagen einblenden", value=False)
-with col4:
-    n_flow = st.number_input("Blumenwagen (135×55)", 0, 60, 0, disabled=not show_flowers)
-
-# Gewicht optional (ausgeblendet standard)
-with st.expander("⚖️ Gewicht eingeben (optional)"):
-    w_euro = st.number_input("kg/Euro", 0, 2000, 0)
-    w_ind  = st.number_input("kg/Industrie", 0, 2000, 0)
-    w_flow = st.number_input("kg/Blumenwagen", 0, 2000, 0)
-
-# Hilfsfunktionen
 def size_cells(name, ori):
     L,B = PAL[name]["L"], PAL[name]["B"]
-    if name == "Industrie":  # immer quer
+    if name == "Industrie":
         ori = "quer"
     if ori == "quer":
         depth = max(1, B // cm_per_cell)   # Tiefe entlang Trailer-Länge
         width = max(1, L // cm_per_cell)   # Breite quer im Trailer
         sym   = PAL[name]["sym_q"]
-    else:  # längs
+    else:
         depth = max(1, L // cm_per_cell)
         width = max(1, B // cm_per_cell)
         sym   = PAL[name]["sym_l"]
     return depth, width, sym
 
-def blank_grid():
-    return [[EM for _ in range(X)] for _ in range(Y)]
-
-def stamp_symbol(grid, x, y, sym):
-    if 0 <= x < X and 0 <= y < Y:
-        grid[y][x] = sym
-
-def center_y(width_cells):
-    return max(0, (Y - width_cells)//2)
+def blank_grid(): return [[EM for _ in range(X)] for _ in range(Y)]
+def stamp(grid, x, y, sym):
+    if 0 <= x < X and 0 <= y < Y: grid[y][x] = sym
+def center_y(width_cells): return max(0, (Y - width_cells)//2)
 
 def render(grid, title):
     st.markdown(f"#### {title}")
     for row in grid:
         st.markdown(f"<pre style='font-size:22px;line-height:100%;margin:0'>{''.join(row)}</pre>", unsafe_allow_html=True)
 
-# ---------- Varianten-Generatoren ----------
-
-# V1: Euro-30 (fixe Regel) 1 quer mittig, 2 quer links/rechts, Rest 3er längs
-def variant_euro_30(n):
-    grid = blank_grid()
-    # 1 quer mittig
+# ---------- Varianten mit x-Start ----------
+def variant_euro_30(n, x0=0):
+    g = blank_grid()
     d_q, w_q, s_q = size_cells("Euro","quer")
-    x = 0
-    y = center_y(w_q)
-    stamp_symbol(grid, x, y, s_q)
-    x += d_q
-    # 2 quer links/rechts
-    stamp_symbol(grid, x, 0, s_q)                 # links
-    stamp_symbol(grid, x, Y-1, s_q)               # rechts (Symbol-Anker)
-    x += d_q
-    # Rest längs in 3er-Reihen
     d_l, w_l, s_l = size_cells("Euro","längs")
-    rows_needed = max(0, (n - 3) // 3)  # 3 schon vorn
-    # drei Spuren quer (links/mitte/rechts)
-    yL = 0
-    yM = center_y(w_l)
-    yR = Y-1
-    for r in range(rows_needed):
-        xr = x + r*d_l
-        stamp_symbol(grid, xr, yL, s_l)
-        stamp_symbol(grid, xr, yM, s_l)
-        stamp_symbol(grid, xr, yR, s_l)
-        if xr + d_l >= X: break
-    return grid
+    x = x0
+    # 1 quer mittig
+    y = center_y(w_q)
+    if x + d_q <= X: stamp(g, x, y, s_q); x += d_q; n -= 1
+    # 2 quer links/rechts
+    if n > 0 and x + d_q <= X:
+        stamp(g, x, 0,   s_q); n -= 1
+        if n > 0: stamp(g, x, Y-1, s_q); n -= 1
+        x += d_q
+    # Rest 3er-Reihen längs
+    lanes = [0, center_y(w_l), Y-1]
+    while n > 0 and x + d_l <= X:
+        for y in lanes:
+            if n > 0: stamp(g, x, y, s_l); n -= 1
+        x += d_l
+    return g
 
-# V2: Euro-24 (schwer, Getränke) – Beispielregel:
-# 2× einzeln quer (hintereinander mittig), dann 2× Doppel-quer, dann 1× Einzel quer, dahinter 3er längs
-def variant_euro_24(n):
-    grid = blank_grid()
+def variant_euro_24(n, x0=0):
+    g = blank_grid()
     d_q,w_q,s_q = size_cells("Euro","quer")
     d_l,w_l,s_l = size_cells("Euro","längs")
-    x=0
+    x = x0
     yC = center_y(w_q)
-    # 2× einzeln quer mittig (hintereinander)
-    if n<=0: return grid
-    stamp_symbol(grid,x,yC,s_q); x+=d_q; n-=1
-    if n<=0: return grid
-    stamp_symbol(grid,x,yC,s_q); x+=d_q; n-=1
-    # 2× Doppel-quer (links & rechts)
-    if n<=0: return grid
-    stamp_symbol(grid,x,0,s_q)
-    if n>1:
-        stamp_symbol(grid,x,Y-1,s_q); n-=2; x+=d_q
-    else:
-        n-=1; x+=d_q
-    # 1× Einzel quer mittig (falls noch da)
-    if n>0:
-        stamp_symbol(grid,x,yC,s_q); x+=d_q; n-=1
-    # Rest in 3er-Reihen längs
-    yL=0; yM=center_y(w_l); yR=Y-1
-    while n>0 and x < X:
-        if n>0: stamp_symbol(grid,x,yL,s_l); n-=1
-        if n>0: stamp_symbol(grid,x,yM,s_l); n-=1
-        if n>0: stamp_symbol(grid,x,yR,s_l); n-=1
-        x+=d_l
-    return grid
+    # 2× einzeln quer mittig hintereinander
+    for _ in range(min(2, n)):
+        if x + d_q <= X: stamp(g, x, yC, s_q); x += d_q; n -= 1
+    # 2× doppelt quer (links+rechts)
+    for _ in range(2):
+        if n <= 0 or x + d_q > X: break
+        stamp(g, x, 0, s_q); n -= 1
+        if n > 0: stamp(g, x, Y-1, s_q); n -= 1
+        x += d_q
+    # 1× quer mittig
+    if n > 0 and x + d_q <= X:
+        stamp(g, x, yC, s_q); x += d_q; n -= 1
+    # Rest längs 3-spurig
+    lanes = [0, center_y(w_l), Y-1]
+    while n > 0 and x + d_l <= X:
+        for y in lanes:
+            if n > 0: stamp(g, x, y, s_l); n -= 1
+        x += d_l
+    return g
 
-# V3: Industrie auto (immer quer). Einzel mittig möglich, sonst Reihen links/rechts
-def variant_industrie(n):
-    grid = blank_grid()
-    d_q,w_q,s_q = size_cells("Industrie","quer")  # erzwingt quer
-    x=0
-    # Falls ungerade: 1 vorn mittig
-    if n%2==1:
-        stamp_symbol(grid,x,center_y(w_q),s_q)
-        x+=d_q; n-=1
-    # Reihen mit 2 quer links+rechts
-    while n>0 and x < X:
-        stamp_symbol(grid,x,0,s_q)
-        if n>1:
-            stamp_symbol(grid,x,Y-1,s_q); n-=2; x+=d_q
-        else:
-            n-=1; x+=d_q
-    return grid
+def variant_industrie(n, x0=0):
+    g = blank_grid()
+    d_q,w_q,s_q = size_cells("Industrie","quer")
+    x = x0
+    # ungerade → 1 vorn mittig
+    if n % 2 == 1 and x + d_q <= X:
+        stamp(g, x, center_y(w_q), s_q)
+        x += d_q; n -= 1
+    while n > 0 and x + d_q <= X:
+        stamp(g, x, 0,   s_q); n -= 1
+        if n > 0: stamp(g, x, Y-1, s_q); n -= 1
+        x += d_q
+    return g
 
-# Blumenwagen-Kacheln (3 quer, 2 längs – wiederholt)
-def place_flowers(grid, n):
-    if n<=0: return
-    d_q,w_q,s_q = size_cells("Blumenwagen","quer")
-    d_l,w_l,s_l = size_cells("Blumenwagen","längs")
-    x=0
-    # 3 quer Reihe
-    for i in range(min(3,n)):
-        y = int((i/(3-1))*(Y-1)) if Y>1 else 0  # links/mitte/rechts
-        stamp_symbol(grid,x,y,s_q)
-    n -= min(3,n)
-    x += d_q
-    # 2 längs
-    if n>0:
-        stamp_symbol(grid,x,0,s_l); n-=1
-    if n>0:
-        stamp_symbol(grid,x,Y-1,s_l); n-=1
+def merge_at_offset(dst, src, offx):
+    for y in range(Y):
+        for x in range(X):
+            if src[y][x] != EM:
+                xx = x + offx
+                if 0 <= xx < X and dst[y][xx] == EM:
+                    dst[y][xx] = src[y][x]
 
-# V4: Mix – einfache Heuristik: zuerst Industrie quer blocken, danach Euro wie V1/V2
+def first_free_x(grid):
+    for xx in range(X):
+        if any(grid[y][xx] == EM for y in range(Y)):
+            return xx
+    return X
+
 def variant_mix(n_euro, n_ind):
     grid = blank_grid()
-    # Industrie zuerst
-    if n_ind>0:
-        g_ind = variant_industrie(n_ind)
-        # merge
-        for y in range(Y):
-            for x in range(X):
-                if g_ind[y][x] != EM:
-                    grid[y][x] = g_ind[y][x]
-    # Finde vorderste freie x-Spalte
-    def first_free_x():
-        for xx in range(X):
-            col_free = any(grid[y][xx] == EM for y in range(Y))
-            if col_free: return xx
-        return X
-    start_x = first_free_x()
-    # Euro dahinter – wähle Template je nach Menge
+    # 1) Industrie vorne
+    g_ind = variant_industrie(n_ind, x0=0) if n_ind > 0 else blank_grid()
+    merge_at_offset(grid, g_ind, 0)
+    # 2) Euro ab erster freier Spalte
+    start_x = first_free_x(grid)
     if n_euro >= 30:
-        g_e = variant_euro_30(n_euro)
+        g_e = variant_euro_30(n_euro, x0=0)
     elif n_euro >= 24:
-        g_e = variant_euro_24(n_euro)
+        g_e = variant_euro_24(n_euro, x0=0)
     else:
-        # kleiner Bestand: einfache 3er-Reihen längs
-        g_e = blank_grid()
-        d_l,w_l,s_l = size_cells("Euro","längs")
-        x = 0
-        yL=0; yM=center_y(w_l); yR=Y-1
-        nn = n_euro
-        while nn>0 and x<X:
-            if nn>0: stamp_symbol(g_e,x,yL,s_l); nn-=1
-            if nn>0: stamp_symbol(g_e,x,yM,s_l); nn-=1
-            if nn>0: stamp_symbol(g_e,x,yR,s_l); nn-=1
-            x+=d_l
-    # merge Euro hinter start_x
-    for y in range(Y):
-        row = g_e[y]
-        for x in range(X):
-            if row[x] != EM:
-                xx = min(X-1, x + start_x)
-                if grid[y][xx] == EM:
-                    grid[y][xx] = row[x]
+        # einfache 3er-Reihen längs ab 0, später versetzt gemerged
+        g_e = variant_euro_24(n_euro, x0=0)
+    merge_at_offset(grid, g_e, start_x)
     return grid
+
+# ---------- PRESETS ----------
+st.markdown("### ⚡ Presets")
+b1, b2, b3, b4 = st.columns(4)
+if "n_euro" not in st.session_state: st.session_state.n_euro = 30
+if "n_ind"  not in st.session_state: st.session_state.n_ind  = 0
+if "n_flow" not in st.session_state: st.session_state.n_flow = 0
+if b1.button("Euro 30"):
+    st.session_state.n_euro, st.session_state.n_ind, st.session_state.n_flow = 30, 0, 0
+if b2.button("Euro 24 (schwer)"):
+    st.session_state.n_euro, st.session_state.n_ind, st.session_state.n_flow = 24, 0, 0
+if b3.button("Industrie voll 26"):
+    st.session_state.n_euro, st.session_state.n_ind, st.session_state.n_flow = 0, 26, 0
+if b4.button("Mix 21 Euro + 6 Industrie"):
+    st.session_state.n_euro, st.session_state.n_ind, st.session_state.n_flow = 21, 6, 0
+
+# ---------- UI: nur Art + Anzahl ----------
+st.markdown("### 📥 Ladung")
+c1,c2,c3,c4 = st.columns([1.2,1.2,1.2,1.6])
+with c1:
+    n_euro = st.number_input("Euro (120×80)", 0, 40, st.session_state.n_euro, key="inp_euro")
+with c2:
+    n_ind  = st.number_input("Industrie (120×100)", 0, 40, st.session_state.n_ind, key="inp_ind")
+with c3:
+    show_flowers = st.checkbox("Blumenwagen einblenden", value=False)
+with c4:
+    n_flow = st.number_input("Blumenwagen (135×55)", 0, 60, st.session_state.n_flow, key="inp_flow", disabled=not show_flowers)
+
+# Gewicht optional & ausblendbar
+with st.expander("⚖️ Gewicht eingeben (optional)"):
+    st.number_input("kg/Euro", 0, 2000, 0)
+    st.number_input("kg/Industrie", 0, 2000, 0)
+    st.number_input("kg/Blumenwagen", 0, 2000, 0)
 
 # ---------- Varianten erzeugen ----------
 tabs = st.tabs(["Variante A", "Variante B", "Variante C"])
 
-# A: If Euro>=30 → Euro-30; elif Euro>=24 → Euro-24; elif Industrie>0 → Industrie-auto; else einfache 3er-Reihen
-if n_euro >= 30:
-    gA = variant_euro_30(n_euro)
+# A
+if n_euro >= 30 and n_ind == 0:
+    gA = variant_euro_30(n_euro, x0=0)
     tabs[0].markdown("**A:** Euro-30 (1 quer mittig, 2 quer, Rest 3er längs)")
-elif n_euro >= 24:
-    gA = variant_euro_24(n_euro)
-    tabs[0].markdown("**A:** Euro-24 (schwer) – 2× einzeln quer, 2× doppelt quer, 1× einzeln, Rest längs")
-elif n_ind > 0:
-    gA = variant_industrie(n_ind)
-    tabs[0].markdown("**A:** Industrie – alles quer, Einzel vorn mittig erlaubt")
+elif n_euro >= 24 and n_ind == 0:
+    gA = variant_euro_24(n_euro, x0=0)
+    tabs[0].markdown("**A:** Euro-24 (schwer): 2× einzeln quer, 2× doppelt quer, 1× quer, Rest längs")
+elif n_ind > 0 and n_euro == 0:
+    gA = variant_industrie(n_ind, x0=0)
+    tabs[0].markdown("**A:** Industrie – alles quer, Einzel vorn mittig (ungerade)")
 else:
-    gA = variant_euro_24(n_euro) if n_euro else blank_grid()
-    tabs[0].markdown("**A:** Euro – kompakte Reihen")
-
+    gA = variant_mix(n_euro, n_ind)
+    tabs[0].markdown("**A:** Mix – Industrie zuerst, Euro dahinter")
 render(gA, "Ladeplan A")
 
-# B: Mix-Heuristik (Industrie zuerst, Euro dahinter nach Regel)
-gB = variant_mix(n_euro, n_ind)
+# B: Alternative
 with tabs[1]:
-    st.markdown("**B:** Mix-Heuristik – Industrie zuerst (quer), Euro dahinter")
-    render(gB, "Ladeplan B")
+    if n_ind > 0 and n_euro > 0:
+        gB = variant_mix(n_euro, n_ind)  # (kann später zweite Heuristik werden)
+        st.markdown("**B:** Mix (alternative Heuristik – gleicher Start, anderes Muster geplant)")
+        render(gB, "Ladeplan B")
+    else:
+        st.markdown("_Keine Alternative nötig_")
 
-# C: Nur Industrie oder nur Euro alternative Darstellung
-if n_ind > 0 and n_euro == 0:
-    gC = variant_industrie(n_ind)
-    c_text = "**C:** Industrie alternative Reihen (immer quer)"
-else:
-    gC = variant_euro_24(n_euro) if n_euro else blank_grid()
-    c_text = "**C:** Euro alternative (schwer) / leer"
+# C: Reserve
 with tabs[2]:
-    st.markdown(c_text)
-    render(gC, "Ladeplan C")
-
-# Blumenwagen optional drüber legen (nur Demo – einfache Kachel vorne)
-if show_flowers and n_flow>0:
-    st.info("Blumenwagen (Demo-Muster 3 quer + 2 längs) werden vorne eingeblendet.")
-    gF = blank_grid()
-    place_flowers(gF, n_flow)
-    st.markdown("#### Blumenwagen-Overlay (vorne)")
-    render(gF, "Blumenwagen")
+    if n_ind > 0 and n_euro == 0:
+        gC = variant_industrie(n_ind, x0=0)
+        st.markdown("**C:** Industrie (Alternative)")
+        render(gC, "Ladeplan C")
+    elif n_euro > 0 and n_ind == 0:
+        gC = variant_euro_24(n_euro, x0=0)
+        st.markdown("**C:** Euro (Alternative schwer)")
+        render(gC, "Ladeplan C")
+    else:
+        st.markdown("_Reserve für weitere Muster_")
