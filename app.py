@@ -43,11 +43,10 @@ st.subheader(f"🔢 Palettenanzeige ({anzahl} Stück) – {pal_pro_reihe} pro Re
 # Zeichnen
 import streamlit.components.v1 as components
 
-html = f"""<div style='display: grid; grid-template-columns: repeat({pal_pro_reihe}, 1fr); 
-            gap: 2px; width: 100%; max-width: 800px; margin: auto;'>\"""
+html = "<div style='display: grid; grid-template-columns: repeat(" + str(pal_pro_reihe) + ", 1fr); gap: 2px; width: 100%; max-width: 800px; margin: auto;'>"
 
 for i in range(anzahl):
-    html += f""<div style='background:#FFA500AA; border:1px solid #333; height:40px; text-align:center; font-size:10px;'>P{i+1}</div>\""
+    html += "<div style='background:#FFA500AA; border:1px solid #333; height:40px; text-align:center; font-size:10px;'>P" + str(i+1) + "</div>"
 
 html += "</div><br><br>"
 components.html(html, height=pal_reihen * 45 + 50)
