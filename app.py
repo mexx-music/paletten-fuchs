@@ -1,13 +1,16 @@
 
 import streamlit as st
 
-st.set_page_config(page_title="🟧 Paletten Fuchs – Alternative Symbole", layout="centered")
-st.title("🟧 Paletten Fuchs – Gleicher Aufbau mit Symbol „–“")
+st.set_page_config(page_title="🟧 Paletten Fuchs – Position Test", layout="centered")
+st.title("🟧 Paletten Fuchs – Test: Position der oberen Querpalette")
 
-st.markdown("### 📦 Darstellung wie zuvor – mit anderem Symbol für quer")
+st.markdown("### 🔧 Querpalette (▬) oben verschieben")
 
-# Verwendung des Bindestrichs – für flachere Quer-Palette
-euro_quer_oben = "  –"
+# Interaktiver Abstand (0–10 Leerzeichen)
+offset = st.slider("Leerzeichen vor ▬ (Querpalette)", 0, 10, 3)
+
+# Erzeuge die Leerzeichen dynamisch
+euro_quer_oben = " " * offset + "▬"
 euro_l1 = "▮ ▮ ▮"
 euro_l2 = "▮ ▮ ▮"
 industrie = "⬜ ⬜"
@@ -29,4 +32,4 @@ if st.checkbox("⚖️ Gewicht anzeigen"):
     st.success(f"🔩 Gesamtgewicht: {gesamt:,} kg")
 
 st.markdown("---")
-st.markdown("🛠️ Querpalette oben jetzt mit Symbol: „–“ statt „▬“")
+st.markdown("🎛️ Mit dem Schieberegler kannst du die ▬ exakt ausrichten.")
