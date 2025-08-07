@@ -1,16 +1,13 @@
 
 import streamlit as st
 
-st.set_page_config(page_title="🟧 Paletten Fuchs – Position Test", layout="centered")
-st.title("🟧 Paletten Fuchs – Test: Position der oberen Querpalette")
+st.set_page_config(page_title="🟧 Paletten Fuchs – Symbolbreite Test", layout="centered")
+st.title("🟧 Paletten Fuchs – Breites Symbol für Querpalette")
 
-st.markdown("### 🔧 Querpalette (▬) oben verschieben")
+st.markdown("### 📦 Darstellung mit ▭▭ oben")
 
-# Interaktiver Abstand (0–10 Leerzeichen)
-offset = st.slider("Leerzeichen vor ▬ (Querpalette)", 0, 10, 3)
-
-# Erzeuge die Leerzeichen dynamisch
-euro_quer_oben = " " * offset + "▬"
+# Neue Darstellung mit breiterem Symbol
+euro_quer_oben = "  ▭▭"  # 2 Leerzeichen + breites Symbol
 euro_l1 = "▮ ▮ ▮"
 euro_l2 = "▮ ▮ ▮"
 industrie = "⬜ ⬜"
@@ -32,4 +29,4 @@ if st.checkbox("⚖️ Gewicht anzeigen"):
     st.success(f"🔩 Gesamtgewicht: {gesamt:,} kg")
 
 st.markdown("---")
-st.markdown("🎛️ Mit dem Schieberegler kannst du die ▬ exakt ausrichten.")
+st.markdown("🧪 Test: Obere Palette mit Symbol ▭▭ für breitere Darstellung")
