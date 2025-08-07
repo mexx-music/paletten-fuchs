@@ -1,15 +1,16 @@
 
 import streamlit as st
 
-st.set_page_config(page_title="🟧 Paletten Fuchs – Breite Querpalette + Slider", layout="centered")
-st.title("🟧 Paletten Fuchs – Breites Symbol + Feinjustierung")
+st.set_page_config(page_title="🟧 Paletten Fuchs – Einzel-Symbol ▭ + Slider", layout="centered")
+st.title("🟧 Paletten Fuchs – Einzelsymbol ▭ mit Schieberegler")
 
-st.markdown("### 🛠️ Positionierung: Querpalette (▭▭) oben mit Slider")
+st.markdown("### 🎛️ Feinjustierung: Einzelnes Rechteck-Symbol (▭)")
 
-# Feinjustierung über Slider
-offset = st.slider("Leerzeichen vor der Querpalette ▭▭", 0, 10, 2)
+# Slider für Einrückung
+offset = st.slider("Leerzeichen vor ▭ (Querpalette)", 0, 10, 2)
 
-euro_quer_oben = " " * offset + "▭▭"
+# Ein einzelnes Symbol ▭, eingerückt
+euro_quer_oben = " " * offset + "▭"
 euro_l1 = "▮ ▮ ▮"
 euro_l2 = "▮ ▮ ▮"
 industrie = "⬜ ⬜"
@@ -31,4 +32,4 @@ if st.checkbox("⚖️ Gewicht anzeigen"):
     st.success(f"🔩 Gesamtgewicht: {gesamt:,} kg")
 
 st.markdown("---")
-st.markdown("🎛️ Mit dem Schieberegler kannst du die ▭▭ exakt mittig ausrichten.")
+st.markdown("✅ Test mit nur einem Rechteck ▭ oben – exakt positionierbar.")
