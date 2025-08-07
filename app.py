@@ -1,238 +1,101 @@
 import streamlit as st
 
-st.set_page_config(page_title="🦊 Paletten Fuchs – Auto‑Layouts (Unicode‑Blöcke)", layout="centered")
-st.title("🦊 Paletten Fuchs – Draufsicht (Unicode‑Blöcke)")
+st.set_page_config(page_title="Paletten Fuchs – Bilder", layout="wide")
+st.title("🦊 Paletten Fuchs – Draufsicht mit Icons")
 
-# ---------- Trailer & Raster ----------
-TRAILER_L = 1360  # cm
-TRAILER_W = 245   # cm
-cm_per_cell = st.sidebar.slider("Raster (cm/Zelle)", 10, 60, 20, 5)
-X = TRAILER_L // cm_per_cell  # Länge in Zellen (x)
-Y = TRAILER_W // cm_per_cell  # Breite in Zellen (y)
-EM = " "  # leer
+# Trailer / Raster
+TRAILER_L, TRAILER_W = 1360, 245  # cm
+cell = st.sidebar.slider("Raster (cm/Zelle)", 5, 40, 10, 5)  # Auflösung
+X, Y = TRAILER_L // cell, TRAILER_W // cell                  # Grid-Spalten/-Zeilen
 
-st.caption(f"Raster: {X}×{Y} Zellen (je {cm_per_cell} cm)")
-
-# ---------- Paletten / Symbole ----------
-PAL = {
-    "Euro":       {"L":120, "B":80,  "sym_q":"▭", "sym_l":"▮"},
-    "Industrie":  {"L":120, "B":100, "sym_q":"⬜", "sym_l":"⬜"},   # immer quer
-    "Blumenwagen":{"L":135, "B":55,  "sym_q":"▣", "sym_l":"▣"},
+# Pfade zu Icons (einfach im Repo ablegen: /icons/…)
+ICON = {
+    ("Euro","l"): "icons/euro_l.png",   # 120x80
+    ("Euro","q"): "icons/euro_q.png",   # 80x120
+    ("Industrie","q"): "icons/ind_q.png", # 100x120 (Industrie immer quer)
+    ("Blumen","l"): "icons/flower_l.png",# 135x55
+    ("Blumen","q"): "icons/flower_q.png"
 }
 
-def size_cells(name, ori):
-    """gibt (depth_x, width_y, symbol) in Zelleneinheiten zurück"""
-    L, B = PAL[name]["L"], PAL[name]["B"]
-    if name == "Industrie":  # Regel: immer quer
-        ori = "quer"
-    if ori == "quer":
-        depth = max(1, B // cm_per_cell)   # Tiefe entlang x
-        width = max(1, L // cm_per_cell)   # Breite quer (y)
-        sym   = PAL[name]["sym_q"]
-    else:  # längs
-        depth = max(1, L // cm_per_cell)
-        width = max(1, B // cm_per_cell)
-        sym   = PAL[name]["sym_l"]
-    return depth, width, sym
+# cm -> Grid-Span
+def span_cm(length_cm, width_cm, ori, typ):
+    # Industrie immer quer
+    if typ == "Industrie": ori = "q"
+    if typ == "Euro":
+        L, B = 120, 80
+    elif typ == "Industrie":
+        L, B = 120, 100
+    else:
+        L, B = 135, 55
+    if ori == "q":  # quer: Tiefe = Breite(cm), Breite = Länge(cm)
+        depth_cm, width_cm = B, L
+    else:          # längs: Tiefe = Länge(cm), Breite = Breite(cm)
+        depth_cm, width_cm = L, B
+    return max(1, depth_cm // cell), max(1, width_cm // cell)
 
-def blank_grid():
-    return [[EM for _ in range(X)] for _ in range(Y)]
+# Einfache Platzierungshilfen
+occupied = [[False]*X for _ in range(Y)]
+items = []  # (x, y, dx, dy, icon)
 
-def can_place(grid, x, y, dx, dy):
-    if x < 0 or y < 0 or x+dx > X or y+dy > Y: return False
-    for yy in range(y, y+dy):
-        for xx in range(x, x+dx):
-            if grid[yy][xx] != EM: return False
+def free(x,y,dx,dy):
+    if x<0 or y<0 or x+dx>X or y+dy>Y: return False
+    for yy in range(y,y+dy):
+        for xx in range(x,x+dx):
+            if occupied[yy][xx]: return False
     return True
 
-def draw_block(grid, x, y, dx, dy, sym):
-    """füllt den ganzen Paletten‑Block mit Unicode‑Zeichen; Rahmen leicht betont"""
-    for yy in range(y, y+dy):
-        for xx in range(x, x+dx):
-            # Rand etwas markanter (wenn möglich)
-            is_border = (yy==y or yy==y+dy-1 or xx==x or xx==x+dx-1)
-            grid[yy][xx] = sym if is_border else (sym if dx<=2 or dy<=2 else "·")
+def place(x,y,dx,dy,icon):
+    for yy in range(y,y+dy):
+        for xx in range(x,x+dx):
+            occupied[yy][xx] = True
+    items.append((x,y,dx,dy,icon))
 
-def center_y(width_cells):
-    return max(0, (Y - width_cells)//2)
+def center_y(dy): return max(0,(Y-dy)//2)
 
-def render(grid, title):
-    st.markdown(f"#### {title}")
-    for row in grid:
-        st.markdown(f"<pre style='font-size:22px; line-height:100%; margin:0'>{''.join(row)}</pre>", unsafe_allow_html=True)
-
-# ---------- Presets ----------
-st.markdown("### ⚡ Presets")
-b1, b2, b3, b4 = st.columns(4)
-if "n_euro" not in st.session_state: st.session_state.n_euro = 30
-if "n_ind"  not in st.session_state: st.session_state.n_ind  = 0
-if "n_flow" not in st.session_state: st.session_state.n_flow = 0
-if b1.button("Euro 30"):
-    st.session_state.n_euro, st.session_state.n_ind, st.session_state.n_flow = 30, 0, 0
-if b2.button("Euro 24 (schwer)"):
-    st.session_state.n_euro, st.session_state.n_ind, st.session_state.n_flow = 24, 0, 0
-if b3.button("Industrie 26"):
-    st.session_state.n_euro, st.session_state.n_ind, st.session_state.n_flow = 0, 26, 0
-if b4.button("Mix 21 Euro + 6 Industrie"):
-    st.session_state.n_euro, st.session_state.n_ind, st.session_state.n_flow = 21, 6, 0
-
-# ---------- UI: nur Art + Anzahl ----------
-st.markdown("### 📥 Ladung")
-c1,c2,c3,c4 = st.columns([1.2,1.2,1.2,1.6])
-with c1:
-    n_euro = st.number_input("Euro (120×80)", 0, 45, st.session_state.n_euro, key="inp_euro")
-with c2:
-    n_ind  = st.number_input("Industrie (120×100)", 0, 45, st.session_state.n_ind,  key="inp_ind")
-with c3:
-    show_flowers = st.checkbox("Blumenwagen einblenden", value=False)
-with c4:
-    n_flow = st.number_input("Blumenwagen (135×55)", 0, 60, st.session_state.n_flow, key="inp_flow", disabled=not show_flowers)
-
-with st.expander("⚖️ Gewicht eingeben (optional)"):
-    st.number_input("kg/Euro", 0, 2000, 0)
-    st.number_input("kg/Industrie", 0, 2000, 0)
-    st.number_input("kg/Blumenwagen", 0, 2000, 0)
-
-# ---------- Varianten (zeichnen echte Blöcke) ----------
-def euro_30_layout(grid, n, x0=0):
-    dq,wq,_ = size_cells("Euro","quer")
-    dl,wl,_ = size_cells("Euro","längs")
-    x = x0
+# --- Beispiel: Euro 30 Schema ---
+def euro_30():
+    dq, wq = span_cm(120,80,"q","Euro")  # ergibt Tiefe=80, Breite=120 → Spans
+    dl, wl = span_cm(120,80,"l","Euro")  # ergibt Tiefe=120, Breite=80
+    x=0
     # 1 quer mittig
-    y = center_y(wq)
-    if n>0 and can_place(grid, x, y, dq, wq):
-        draw_block(grid, x, y, dq, wq, PAL["Euro"]["sym_q"]); n -= 1
+    y = center_y(wq); 
+    if free(x,y,dq,wq): place(x,y,dq,wq, ICON[("Euro","q")])
     x += dq
-    # 2 quer links + rechts
-    for yy in [0, Y-wq]:
-        if n>0 and can_place(grid, x, yy, dq, wq):
-            draw_block(grid, x, yy, dq, wq, PAL["Euro"]["sym_q"]); n -= 1
+    # 2 quer links+rechts
+    if free(x,0,dq,wq): place(x,0,dq,wq, ICON[("Euro","q")])
+    if free(x,Y-wq,dq,wq): place(x,Y-wq,dq,wq, ICON[("Euro","q")])
     x += dq
-    # Rest: 3‑Spur längs (links/mitte/rechts)
+    # Rest: 3er-Reihen längs
     lanes = [0, center_y(wl), Y-wl]
-    while n>0 and x+dl <= X:
-        for yy in lanes:
-            if n>0 and can_place(grid, x, yy, dl, wl):
-                draw_block(grid, x, yy, dl, wl, PAL["Euro"]["sym_l"]); n -= 1
+    while x+dl <= X:
+        for y in lanes:
+            if free(x,y,dl,wl):
+                place(x,y,dl,wl, ICON[("Euro","l")])
         x += dl
 
-def euro_24_layout(grid, n, x0=0):
-    dq,wq,_ = size_cells("Euro","quer")
-    dl,wl,_ = size_cells("Euro","längs")
-    x = x0
-    yC = center_y(wq)
-    # 2× einzel quer mittig
-    for _ in range(min(2,n)):
-        if can_place(grid, x, yC, dq, wq):
-            draw_block(grid, x, yC, dq, wq, PAL["Euro"]["sym_q"]); n -= 1; x += dq
-    # 2× doppelt quer (links+rechts)
-    for _ in range(2):
-        if n<=0: break
-        for yy in [0, Y-wq]:
-            if n>0 and can_place(grid, x, yy, dq, wq):
-                draw_block(grid, x, yy, dq, wq, PAL["Euro"]["sym_q"]); n -= 1
-        x += dq
-    # 1× einzel quer mittig (falls übrig)
-    if n>0 and can_place(grid, x, yC, dq, wq):
-        draw_block(grid, x, yC, dq, wq, PAL["Euro"]["sym_q"]); n -= 1; x += dq
-    # Rest längs 3‑Spur
-    lanes = [0, center_y(wl), Y-wl]
-    while n>0 and x+dl <= X:
-        for yy in lanes:
-            if n>0 and can_place(grid, x, yy, dl, wl):
-                draw_block(grid, x, yy, dl, wl, PAL["Euro"]["sym_l"]); n -= 1
-        x += dl
+# --- Render CSS Grid ---
+def render():
+    cell_px = 10  # visuelle Zellgröße
+    html = f"""
+    <div style="
+      display:grid;
+      grid-template-columns: repeat({X}, {cell_px}px);
+      grid-auto-rows: {cell_px}px;
+      gap: 1px;
+      background:#ddd; padding:4px; border:2px solid #333; width: fit-content;">
+    """
+    for (x,y,dx,dy,icon) in items:
+        html += f"""
+        <div style="
+          grid-column:{x+1}/span {dx};
+          grid-row:{y+1}/span {dy};
+          background: url('{icon}') center/contain no-repeat, #fafafa;
+          border:1px solid #777;"></div>
+        """
+    html += "</div>"
+    st.components.v1.html(html, height=min(800, (cell_px+1)*Y + 40), scrolling=True)
 
-def industrie_layout(grid, n, x0=0):
-    dq,wq,_ = size_cells("Industrie","quer")
-    x = x0
-    # ungerade → 1 mittig vorne
-    if n%2==1 and can_place(grid, x, center_y(wq), dq, wq):
-        draw_block(grid, x, center_y(wq), dq, wq, PAL["Industrie"]["sym_q"]); n -= 1; x += dq
-    while n>0 and x+dq <= X:
-        for yy in [0, Y-wq]:
-            if n>0 and can_place(grid, x, yy, dq, wq):
-                draw_block(grid, x, yy, dq, wq, PAL["Industrie"]["sym_q"]); n -= 1
-        x += dq
-
-def first_free_x(grid):
-    for xx in range(X):
-        if any(grid[yy][xx] == EM for yy in range(Y)):
-            return xx
-    return X
-
-def merge_from(grid_dst, grid_src, offx):
-    for y in range(Y):
-        for x in range(X):
-            if grid_src[y][x] != EM:
-                xx = x + offx
-                if 0 <= xx < X and grid_dst[y][xx] == EM:
-                    grid_dst[y][xx] = grid_src[y][x]
-
-def euro_rows_simple(grid, n, x0=0):
-    dl,wl,_ = size_cells("Euro","längs")
-    x = x0
-    lanes = [0, center_y(wl), Y-wl]
-    while n>0 and x+dl <= X:
-        for yy in lanes:
-            if n>0 and can_place(grid, x, yy, dl, wl):
-                draw_block(grid, x, yy, dl, wl, PAL["Euro"]["sym_l"]); n -= 1
-        x += dl
-
-def mix_variant(n_euro, n_ind):
-    base = blank_grid()
-    # 1) Industrie vorn
-    gI = blank_grid()
-    industrie_layout(gI, n_ind, x0=0)
-    merge_from(base, gI, 0)
-    # 2) Euro dahinter (ab erster freier Spalte)
-    start = first_free_x(base)
-    gE = blank_grid()
-    if n_euro >= 30:
-        euro_30_layout(gE, n_euro, x0=0)
-    elif n_euro >= 24:
-        euro_24_layout(gE, n_euro, x0=0)
-    else:
-        euro_rows_simple(gE, n_euro, x0=0)
-    merge_from(base, gE, start)
-    return base
-
-# ---------- Varianten anzeigen ----------
-tabs = st.tabs(["Variante A", "Variante B", "Variante C"])
-
-# A
-if n_ind>0 and n_euro>0:
-    gA = mix_variant(n_euro, n_ind)
-    tabs[0].markdown("**A:** Mix – Industrie zuerst (quer), Euro dahinter (30/24‑Regel)")
-elif n_euro >= 30:
-    gA = blank_grid(); euro_30_layout(gA, n_euro, x0=0)
-    tabs[0].markdown("**A:** Euro‑30: 1 quer mittig, 2 quer außen, Rest 3er‑Reihen längs")
-elif n_euro >= 24:
-    gA = blank_grid(); euro_24_layout(gA, n_euro, x0=0)
-    tabs[0].markdown("**A:** Euro‑24 (schwer): 2× einzeln quer, 2× doppelt quer, 1× quer, Rest längs")
-elif n_ind > 0:
-    gA = blank_grid(); industrie_layout(gA, n_ind, x0=0)
-    tabs[0].markdown("**A:** Industrie nur quer (ungerade: 1 vorn mittig)")
-else:
-    gA = blank_grid()
-render(gA, "Ladeplan A")
-
-# B: Alternative (Euro‑Reihen oder Industrie‑Reihen separat)
-with tabs[1]:
-    gB = blank_grid()
-    if n_euro and not n_ind:
-        euro_rows_simple(gB, n_euro, x0=0)
-        st.markdown("**B:** Euro – einfache 3er‑Reihen längs")
-    elif n_ind and not n_euro:
-        industrie_layout(gB, n_ind, x0=0)
-        st.markdown("**B:** Industrie – Reihen nur quer")
-    else:
-        gB = mix_variant(n_euro, n_ind)
-        st.markdown("**B:** Mix (gleicher Algorithmus) – zweite Ansicht")
-    render(gB, "Ladeplan B")
-
-# C: Reserve
-with tabs[2]:
-    gC = blank_grid()
-    st.markdown("_Weitere Muster folgen (z. B. 26 Euro, 34 Euro, Mix‑Varianten mit Blumenwagen)._")
-    render(gC, "Ladeplan C")
+# Demo laufen lassen
+st.subheader("Demo: Euro 30 (1 quer, 2 quer, Rest 3er-Reihen längs)")
+euro_30()
+render()
