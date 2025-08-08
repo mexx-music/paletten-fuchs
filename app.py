@@ -148,20 +148,18 @@ def block_euro_long_then_cross_tail(occ, items, placed, x_start, n):
         x += dl
     fill_tail_closed_euro(occ, items, placed, x, n)
 
-# ---------- Schwere Ladung (21–24): vorne entlasten ----------
+# ---------- Schwere Ladung (21–24) ----------
 def euro_heavy(occ, items, placed, n, x0=0):
     dq,wq = span_int("Euro","q");  dl,wl = span_int("Euro","l")
     yC = center_y_int(wq)
     x = x0
 
-    # 1) vorne 1–2 einzeln quer
     singles_front = 2 if n >= 23 else 1
     for _ in range(min(singles_front, n)):
         if x+dq<=GX and free_int(occ, x,yC,dq,wq):
             place_int(occ, items, placed, x,yC,dq,wq, ICON[("Euro","q")], "Euro")
             n -= 1; x += dq
 
-    # 2) 1–2 Quer-Paare links/rechts
     pair_sets = 2 if n >= 22 else 1
     for _ in range(pair_sets):
         if n <= 0 or x+dq>GX: break
@@ -171,17 +169,15 @@ def euro_heavy(occ, items, placed, n, x0=0):
                 n -= 1
         x += dq
 
-    # 3) wieder 1 quer mittig
     if n>0 and x+dq<=GX and free_int(occ, x,yC,dq,wq):
         place_int(occ, items, placed, x,yC,dq,wq, ICON[("Euro","q")], "Euro")
         n -= 1; x += dq
 
-    # 4) Rest geschlossen
     fill_tail_closed_euro(occ, items, placed, x, n)
 
 # ---------- Varianten ----------
 def generate_variants(n_euro, n_ind, force_euro_long=False, heavy=False):
-    # Sonderregel: 33 Euro immer nur längs
+    # 33 Euro immer nur längs
     if n_euro == 33:
         occ, items, placed = empty_board()
         if n_ind > 0:
