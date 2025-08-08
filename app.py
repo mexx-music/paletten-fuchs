@@ -1,17 +1,16 @@
 import streamlit as st
 from math import ceil
 
-st.set_page_config(page_title="🦊 PAL Fuchs 8 – Pro", layout="wide")
-st.title("🦊 PAL Fuchs 8 – Draufsicht (fixe Physik, Varianten & schwere Ladung)")
+st.set_page_config(page_title="🦊 PAL Fuchs 8 – Final (fixe Physik + 33 längs auto)", layout="wide")
+st.title("🦊 PAL Fuchs 8 – Draufsicht (fixe Physik, Varianten, schwere Ladung, 33 längs auto)")
 
 # ---------- Trailer ----------
-TRAILER_L, TRAILER_W = 1360, 245  # cm (Sattel innen)
+TRAILER_L, TRAILER_W = 1360, 245  # cm
 
 # ---------- Anzeige (nur Optik) ----------
 cell_cm = st.sidebar.slider("Raster (cm/Zelle) – Anzeige", 10, 40, 25, 5)  # nur Darstellung
 cell_px = st.sidebar.slider("Zellpixel (Zoom)", 4, 16, 4, 1)
-
-st.caption(f"Anzeige: {TRAILER_W//cell_cm} × {TRAILER_L//cell_cm} Zellen • 1 Zelle = {cell_cm} cm")
+st.caption(f"Anzeige: {TRAILER_W//cell_cm} × {TRAILER_L//cell_cm} Zellen • 1 Zelle = {cell_cm} cm")
 
 # ---------- Icons ----------
 ICON = {
@@ -38,7 +37,7 @@ def span_int(name, ori):
 
 def empty_board():
     occ = [[False]*GX for _ in range(GY)]
-    items = []  # (x,y,dx,dy,icon,typ)  -> x,y,dx,dy in 20‑cm‑Zellen
+    items = []  # (x,y,dx,dy,icon,typ)  -> x,y,dx,dy in 20-cm-Zellen
     placed = {"Euro":0, "Industrie":0, "Blume":0}
     return occ, items, placed
 
@@ -149,20 +148,20 @@ def block_euro_long_then_cross_tail(occ, items, placed, x_start, n):
         x += dl
     fill_tail_closed_euro(occ, items, placed, x, n)
 
-# ---------- Schwere Ladung (21–24): vorne entlasten, aber kein „leer“
+# ---------- Schwere Ladung (21–24): vorne entlasten ----------
 def euro_heavy(occ, items, placed, n, x0=0):
     dq,wq = span_int("Euro","q");  dl,wl = span_int("Euro","l")
     yC = center_y_int(wq)
     x = x0
 
-    # 1) vorne 1 oder 2 einzeln quer (mittig)
+    # 1) vorne 1–2 einzeln quer
     singles_front = 2 if n >= 23 else 1
     for _ in range(min(singles_front, n)):
         if x+dq<=GX and free_int(occ, x,yC,dq,wq):
             place_int(occ, items, placed, x,yC,dq,wq, ICON[("Euro","q")], "Euro")
             n -= 1; x += dq
 
-    # 2) dann 1–2 Quer-Paare (links+rechts)
+    # 2) 1–2 Quer-Paare links/rechts
     pair_sets = 2 if n >= 22 else 1
     for _ in range(pair_sets):
         if n <= 0 or x+dq>GX: break
@@ -172,19 +171,30 @@ def euro_heavy(occ, items, placed, n, x0=0):
                 n -= 1
         x += dq
 
-    # 3) wieder 1 quer mittig (falls noch da)
+    # 3) wieder 1 quer mittig
     if n>0 and x+dq<=GX and free_int(occ, x,yC,dq,wq):
         place_int(occ, items, placed, x,yC,dq,wq, ICON[("Euro","q")], "Euro")
         n -= 1; x += dq
 
-    # 4) Rest geschlossen (3 längs, evtl. 2 quer)
+    # 4) Rest geschlossen
     fill_tail_closed_euro(occ, items, placed, x, n)
 
-# ---------- Varianten (4 Muster + schwere Ladung) ----------
+# ---------- Varianten ----------
 def generate_variants(n_euro, n_ind, force_euro_long=False, heavy=False):
+    # Sonderregel: 33 Euro immer nur längs
+    if n_euro == 33:
+        occ, items, placed = empty_board()
+        if n_ind > 0:
+            block_industrie_all(occ, items, placed, n_ind)
+            start = first_free_x_int(occ)
+            block_euro_only_long(occ, items, placed, start, n_euro)
+        else:
+            block_euro_only_long(occ, items, placed, 0, n_euro)
+        return [(items, placed)]
+
     variants = []
 
-    # Var A: Industrie → Euro (quer‑Start, dann Abschluss)
+    # Var A
     occ, items, placed = empty_board()
     if n_ind>0: block_industrie_all(occ, items, placed, n_ind)
     start = first_free_x_int(occ)
@@ -196,7 +206,7 @@ def generate_variants(n_euro, n_ind, force_euro_long=False, heavy=False):
         block_euro_cross_then_long(occ, items, placed, start, n_euro)
     variants.append((items, placed))
 
-    # Var B: Industrie → Euro (erst Längsblöcke, dann Quer‑Abschluss) / heavy bevorzugt
+    # Var B
     occ, items, placed = empty_board()
     if n_ind>0: block_industrie_all(occ, items, placed, n_ind)
     start = first_free_x_int(occ)
@@ -206,7 +216,7 @@ def generate_variants(n_euro, n_ind, force_euro_long=False, heavy=False):
         block_euro_long_then_cross_tail(occ, items, placed, start, n_euro)
     variants.append((items, placed))
 
-    # Var C: Euro nur längs (z. B. 33) – Industrie davor, wenn vorhanden
+    # Var C – Euro nur längs über alles
     occ, items, placed = empty_board()
     if n_ind>0:
         block_industrie_all(occ, items, placed, n_ind)
@@ -216,7 +226,7 @@ def generate_variants(n_euro, n_ind, force_euro_long=False, heavy=False):
         block_euro_only_long(occ, items, placed, 0, n_euro)
     variants.append((items, placed))
 
-    # Var D: Euro doppelt quer außen, dann Abschluss / heavy hat Vorrang
+    # Var D – doppelt quer außen, dann Abschluss
     occ, items, placed = empty_board()
     if n_ind>0: block_industrie_all(occ, items, placed, n_ind)
     start = first_free_x_int(occ)
@@ -241,10 +251,8 @@ st.subheader("📥 Manuelle Menge")
 c1,c2,c3,c4 = st.columns([1.2,1.2,1.2,1.6])
 with c1: n_euro = st.number_input("Euro (120×80)", 0, 45, 30)
 with c2: n_ind  = st.number_input("Industrie (120×100)", 0, 45, 0)
-with c3:
-    force_long = st.checkbox("Euro nur längs erzwingen (z. B. 33)", value=False)
-with c4:
-    heavy = st.checkbox("Schwere Ladung (21–24) – vordere Achse entlasten", value=False)
+with c3: force_long = st.checkbox("Euro nur längs erzwingen", value=False, help="Für Spezialfälle außer 33 – bei 33 wird automatisch längs gesetzt.")
+with c4: heavy = st.checkbox("Schwere Ladung (21–24) – Vorderachse entlasten", value=False)
 
 variants = generate_variants(int(n_euro), int(n_ind), force_euro_long=force_long, heavy=heavy)
 
@@ -295,10 +303,10 @@ for typ in ["Euro","Industrie"]:
         missing_msgs.append(f"– {missing}× {typ} passt/passen nicht mehr")
 
 used_cm = used_length_cm(items)
-st.markdown(f"**Genutzte Länge (real):** {used_cm} cm von {TRAILER_L} cm  (≈ {used_cm/TRAILER_L:.0%})")
+st.markdown(f"**Genutzte Länge (real):** {used_cm} cm von {TRAILER_L} cm  (≈ {used_cm/TRAILER_L:.0%})")
 
 if used_cm > TRAILER_L:
-    st.error("🚫 **Platz reicht nicht (Länge):** Reale Nutzlänge überschreitet 13,6 m.")
+    st.error("🚫 **Platz reicht nicht (Länge):** Reale Nutzlänge überschreitet 13,6 m.")
 elif missing_msgs:
     st.error("🚫 **Platz reicht nicht (Anzahl):**\n" + "\n".join(missing_msgs))
 else:
