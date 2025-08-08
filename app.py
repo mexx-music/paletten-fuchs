@@ -1,16 +1,17 @@
 import streamlit as st
+from math import ceil
 
-st.set_page_config(page_title="🦊 PAL Fuchs 7 – Varianten", layout="wide")
-st.title("🦊 PAL Fuchs 7 – Draufsicht mit Icons & Varianten")
+st.set_page_config(page_title="🦊 PAL Fuchs 8 – Pro", layout="wide")
+st.title("🦊 PAL Fuchs 8 – Draufsicht (fixe Physik, Varianten & schwere Ladung)")
 
-# ---------- Trailer & Grid ----------
-TRAILER_L, TRAILER_W = 1360, 245  # cm
+# ---------- Trailer ----------
+TRAILER_L, TRAILER_W = 1360, 245  # cm (Sattel innen)
 
-# Wunsch-Defaults: Raster 25 cm, Zoom 4 px
-cell_cm = st.sidebar.slider("Raster (cm/Zelle)", 5, 40, 25, 5)
-cell_px = st.sidebar.slider("Zellpixel (Zoom)", 4, 14, 4, 1)
+# ---------- Anzeige (nur Optik) ----------
+cell_cm = st.sidebar.slider("Raster (cm/Zelle) – Anzeige", 10, 40, 25, 5)  # nur Darstellung
+cell_px = st.sidebar.slider("Zellpixel (Zoom)", 4, 16, 4, 1)
 
-X, Y = TRAILER_L // cell_cm, TRAILER_W // cell_cm
+st.caption(f"Anzeige: {TRAILER_W//cell_cm} × {TRAILER_L//cell_cm} Zellen • 1 Zelle = {cell_cm} cm")
 
 # ---------- Icons ----------
 ICON = {
@@ -21,244 +22,271 @@ ICON = {
     ("Blume","q"): "icons/flower_q.png",
 }
 
-# ---------- Hilfsfunktionen ----------
-def span(name, ori):
+# ---------- Fixe Physik (immer 20 cm) ----------
+CALC_CELL_CM = 20
+GX, GY = TRAILER_L // CALC_CELL_CM, TRAILER_W // CALC_CELL_CM  # interne Zellen (x=Länge, y=Breite)
+
+def span_int(name, ori):
     if name == "Euro":        L,B = 120, 80
     elif name == "Industrie": L,B = 120,100
-    else:                     L,B = 135, 55  # Blume (Demo)
-    if name == "Industrie":
-        ori = "q"  # Industrie immer quer
-    if ori == "q":
-        depth_cm, width_cm = B, L
-    else:
-        depth_cm, width_cm = L, B
-    dx = max(1, depth_cm // cell_cm)   # entlang Trailer-Länge (x)
-    dy = max(1, width_cm // cell_cm)   # quer im Trailer (y)
+    else:                     L,B = 135, 55  # Blumenwagen
+    if name == "Industrie":   ori = "q"      # Industrie immer quer
+    depth_cm, width_cm = (B, L) if ori == "q" else (L, B)
+    dx = max(1, ceil(depth_cm / CALC_CELL_CM))   # entlang Länge
+    dy = max(1, ceil(width_cm  / CALC_CELL_CM))  # quer
     return dx, dy
 
-def center_y(dy): return max(0, (Y - dy) // 2)
-
 def empty_board():
-    occupied = [[False]*X for _ in range(Y)]
-    items = []  # (x,y,dx,dy,icon,typ)
+    occ = [[False]*GX for _ in range(GY)]
+    items = []  # (x,y,dx,dy,icon,typ)  -> x,y,dx,dy in 20‑cm‑Zellen
     placed = {"Euro":0, "Industrie":0, "Blume":0}
-    return occupied, items, placed
+    return occ, items, placed
 
-def free(occ, x,y,dx,dy):
-    if x<0 or y<0 or x+dx>X or y+dy>Y: return False
+def center_y_int(dy): return max(0, (GY - dy)//2)
+
+def free_int(occ, x,y,dx,dy):
+    if x<0 or y<0 or x+dx>GX or y+dy>GY: return False
     for yy in range(y,y+dy):
         for xx in range(x,x+dx):
             if occ[yy][xx]: return False
     return True
 
-def place(occ, items, placed, x,y,dx,dy,icon,typ):
+def place_int(occ, items, placed, x,y,dx,dy,icon,typ):
     for yy in range(y,y+dy):
         for xx in range(x,x+dx):
             occ[yy][xx] = True
     items.append((x,y,dx,dy,icon,typ))
     placed[typ] += 1
 
-def first_free_x(occ):
-    for xx in range(X):
-        if any(not occ[yy][xx] for yy in range(Y)): return xx
-    return X
+def first_free_x_int(occ):
+    for xx in range(GX):
+        if any(not occ[yy][xx] for yy in range(GY)): return xx
+    return GX
 
 def used_length_cm(items):
     if not items: return 0
     x_end = max(x+dx for (x,y,dx,dy,icon,typ) in items)
-    return x_end * cell_cm
+    return x_end * CALC_CELL_CM
 
-# ---------- Heckabschluss Euro: 3 längs-Spuren, Rest=2 quer ----------
+# ---------- Abschluss Euro: 3 längs, Rest 2 quer ----------
 def fill_tail_closed_euro(occ, items, placed, x_start, euro_left):
     if euro_left <= 0: return
-    dq,wq = span("Euro","q")
-    dl,wl = span("Euro","l")
+    dq,wq = span_int("Euro","q")
+    dl,wl = span_int("Euro","l")
 
     if euro_left % 3 == 0 or euro_left < 2:
-        cols_long = euro_left // 3
-        need_tail_q = False
+        cols_long = euro_left // 3; need_tail_q = False
     else:
-        cols_long = max(0, (euro_left - 2)//3)
-        need_tail_q = True
+        cols_long = max(0, (euro_left - 2)//3); need_tail_q = True
 
-    lanes = [0, center_y(wl), Y-wl]
+    lanes = [0, center_y_int(wl), GY-wl]
     x = x_start
-    # 3er Längsreihen
     for _ in range(cols_long):
-        if x + dl > X: break
+        if x + dl > GX: break
         for y in lanes:
-            if free(occ, x,y,dl,wl):
-                place(occ, items, placed, x,y,dl,wl, ICON[("Euro","l")], "Euro")
+            if free_int(occ, x,y,dl,wl):
+                place_int(occ, items, placed, x,y,dl,wl, ICON[("Euro","l")], "Euro")
         x += dl
-    # 2× Querabschluss
-    if need_tail_q and x + dq <= X:
-        if free(occ, x,0,dq,wq):
-            place(occ, items, placed, x,0,dq,wq, ICON[("Euro","q")], "Euro")
-        if free(occ, x,Y-wq,dq,wq):
-            place(occ, items, placed, x,Y-wq,dq,wq, ICON[("Euro","q")], "Euro")
+
+    if need_tail_q and x + dq <= GX:
+        if free_int(occ, x,0,dq,wq):
+            place_int(occ, items, placed, x,0,dq,wq, ICON[("Euro","q")], "Euro")
+        if free_int(occ, x,GY-wq,dq,wq):
+            place_int(occ, items, placed, x,GY-wq,dq,wq, ICON[("Euro","q")], "Euro")
 
 # ---------- Bausteine ----------
 def block_industrie_all(occ, items, placed, n):
-    dq,wq = span("Industrie","q")
+    dq,wq = span_int("Industrie","q")
     x=0
-    # ungerade → 1 mittig zuerst
     if n%2==1:
-        y=center_y(wq)
-        if free(occ, x,y,dq,wq):
-            place(occ, items, placed, x,y,dq,wq, ICON[("Industrie","q")], "Industrie")
+        y=center_y_int(wq)
+        if free_int(occ, x,y,dq,wq):
+            place_int(occ, items, placed, x,y,dq,wq, ICON[("Industrie","q")], "Industrie")
             n -= 1; x += dq
-    # Paare links+rechts
-    while n>0 and x+dq<=X:
-        for y in [0, Y-wq]:
-            if n>0 and free(occ, x,y,dq,wq):
-                place(occ, items, placed, x,y,dq,wq, ICON[("Industrie","q")], "Industrie")
+    while n>0 and x+dq<=GX:
+        for y in [0, GY-wq]:
+            if n>0 and free_int(occ, x,y,dq,wq):
+                place_int(occ, items, placed, x,y,dq,wq, ICON[("Industrie","q")], "Industrie")
                 n -= 1
         x += dq
-    return x  # nächste freie Spalte (ungefähr)
+    return x
 
 def block_euro_only_long(occ, items, placed, x_start, n):
-    dl,wl = span("Euro","l")
-    lanes = [0, center_y(wl), Y-wl]
+    dl,wl = span_int("Euro","l")
+    lanes = [0, center_y_int(wl), GY-wl]
     x = x_start
-    while n>0 and x+dl<=X:
+    while n>0 and x+dl<=GX:
         for y in lanes:
-            if n>0 and free(occ, x,y,dl,wl):
-                place(occ, items, placed, x,y,dl,wl, ICON[("Euro","l")], "Euro")
+            if n>0 and free_int(occ, x,y,dl,wl):
+                place_int(occ, items, placed, x,y,dl,wl, ICON[("Euro","l")], "Euro")
                 n -= 1
         x += dl
 
 def block_euro_cross_then_long(occ, items, placed, x_start, n):
-    dq,wq = span("Euro","q");  dl,wl = span("Euro","l")
+    dq,wq = span_int("Euro","q");  dl,wl = span_int("Euro","l")
     x = x_start
-    # 1 quer mittig
-    if n>0 and x+dq<=X and free(occ, x,center_y(wq),dq,wq):
-        place(occ, items, placed, x,center_y(wq),dq,wq, ICON[("Euro","q")], "Euro")
+    if n>0 and x+dq<=GX and free_int(occ, x,center_y_int(wq),dq,wq):
+        place_int(occ, items, placed, x,center_y_int(wq),dq,wq, ICON[("Euro","q")], "Euro")
         n -= 1; x += dq
-    # 2 quer außen
-    if n>=2 and x+dq<=X:
-        for y in [0, Y-wq]:
-            if n>0 and free(occ, x,y,dq,wq):
-                place(occ, items, placed, x,y,dq,wq, ICON[("Euro","q")], "Euro")
+    if n>=2 and x+dq<=GX:
+        for y in [0, GY-wq]:
+            if n>0 and free_int(occ, x,y,dq,wq):
+                place_int(occ, items, placed, x,y,dq,wq, ICON[("Euro","q")], "Euro")
                 n -= 1
         x += dq
-    # Rest: geschlossen
     fill_tail_closed_euro(occ, items, placed, x, n)
 
 def block_euro_long_then_cross_tail(occ, items, placed, x_start, n):
-    # erst rein längs in 3er-Spuren, am Ende ggf. 2 quer (geschlossen)
-    dl,wl = span("Euro","l")
-    lanes = [0, center_y(wl), Y-wl]
+    dl,wl = span_int("Euro","l")
+    lanes = [0, center_y_int(wl), GY-wl]
     x = x_start
-    # so viele volle 3er-Spalten wie möglich
     col_cap = 3
-    while n >= col_cap and x+span("Euro","l")[0] <= X:
+    while n >= col_cap and x+dl <= GX:
         for y in lanes:
-            if free(occ, x,y,dl,wl):
-                place(occ, items, placed, x,y,dl,wl, ICON[("Euro","l")], "Euro")
+            if free_int(occ, x,y,dl,wl):
+                place_int(occ, items, placed, x,y,dl,wl, ICON[("Euro","l")], "Euro")
         n -= col_cap
         x += dl
-    # Rest geschlossen
     fill_tail_closed_euro(occ, items, placed, x, n)
 
-# ---------- Varianten-Generator ----------
-def generate_variants(n_euro, n_ind, force_euro_long=False):
+# ---------- Schwere Ladung (21–24): vorne entlasten, aber kein „leer“
+def euro_heavy(occ, items, placed, n, x0=0):
+    dq,wq = span_int("Euro","q");  dl,wl = span_int("Euro","l")
+    yC = center_y_int(wq)
+    x = x0
+
+    # 1) vorne 1 oder 2 einzeln quer (mittig)
+    singles_front = 2 if n >= 23 else 1
+    for _ in range(min(singles_front, n)):
+        if x+dq<=GX and free_int(occ, x,yC,dq,wq):
+            place_int(occ, items, placed, x,yC,dq,wq, ICON[("Euro","q")], "Euro")
+            n -= 1; x += dq
+
+    # 2) dann 1–2 Quer-Paare (links+rechts)
+    pair_sets = 2 if n >= 22 else 1
+    for _ in range(pair_sets):
+        if n <= 0 or x+dq>GX: break
+        for y in [0, GY-wq]:
+            if n>0 and free_int(occ, x,y,dq,wq):
+                place_int(occ, items, placed, x,y,dq,wq, ICON[("Euro","q")], "Euro")
+                n -= 1
+        x += dq
+
+    # 3) wieder 1 quer mittig (falls noch da)
+    if n>0 and x+dq<=GX and free_int(occ, x,yC,dq,wq):
+        place_int(occ, items, placed, x,yC,dq,wq, ICON[("Euro","q")], "Euro")
+        n -= 1; x += dq
+
+    # 4) Rest geschlossen (3 längs, evtl. 2 quer)
+    fill_tail_closed_euro(occ, items, placed, x, n)
+
+# ---------- Varianten (4 Muster + schwere Ladung) ----------
+def generate_variants(n_euro, n_ind, force_euro_long=False, heavy=False):
     variants = []
 
-    # Variante 1: Industrie → Euro (quer+quer+geschlossen)
+    # Var A: Industrie → Euro (quer‑Start, dann Abschluss)
     occ, items, placed = empty_board()
-    if n_ind>0:
-        block_industrie_all(occ, items, placed, n_ind)
-    start = first_free_x(occ)
-    if force_euro_long:
+    if n_ind>0: block_industrie_all(occ, items, placed, n_ind)
+    start = first_free_x_int(occ)
+    if heavy and 21 <= n_euro <= 24:
+        euro_heavy(occ, items, placed, n_euro, start)
+    elif force_euro_long:
         block_euro_only_long(occ, items, placed, start, n_euro)
     else:
         block_euro_cross_then_long(occ, items, placed, start, n_euro)
     variants.append((items, placed))
 
-    # Variante 2: Industrie → Euro (längs zuerst, dann geschlossener Abschluss)
+    # Var B: Industrie → Euro (erst Längsblöcke, dann Quer‑Abschluss) / heavy bevorzugt
     occ, items, placed = empty_board()
-    if n_ind>0:
-        block_industrie_all(occ, items, placed, n_ind)
-    start = first_free_x(occ)
-    block_euro_long_then_cross_tail(occ, items, placed, start, n_euro)
+    if n_ind>0: block_industrie_all(occ, items, placed, n_ind)
+    start = first_free_x_int(occ)
+    if heavy and 21 <= n_euro <= 24:
+        euro_heavy(occ, items, placed, n_euro, start)
+    else:
+        block_euro_long_then_cross_tail(occ, items, placed, start, n_euro)
     variants.append((items, placed))
 
-    # Variante 3: Euro-only längs über alles (für z.B. 33 längs)
+    # Var C: Euro nur längs (z. B. 33) – Industrie davor, wenn vorhanden
     occ, items, placed = empty_board()
     if n_ind>0:
-        # Industrie sicher: zuerst setzen, dann Euro nur längs
         block_industrie_all(occ, items, placed, n_ind)
-        start = first_free_x(occ)
+        start = first_free_x_int(occ)
         block_euro_only_long(occ, items, placed, start, n_euro)
     else:
         block_euro_only_long(occ, items, placed, 0, n_euro)
     variants.append((items, placed))
 
-    # Variante 4: Euro quer-Start doppelt (außen), dann längs, dann Tail
+    # Var D: Euro doppelt quer außen, dann Abschluss / heavy hat Vorrang
     occ, items, placed = empty_board()
-    if n_ind>0:
-        block_industrie_all(occ, items, placed, n_ind)
-    start = first_free_x(occ)
-    dq,wq = span("Euro","q")
-    x = start
-    if n_euro>=2 and x+dq<=X:
-        for y in [0, Y-wq]:
-            if free(occ, x,y,dq,wq):
-                place(occ, items, placed, x,y,dq,wq, ICON[("Euro","q")], "Euro")
-                n_euro -= 1
-        x += dq
-    fill_tail_closed_euro(occ, items, placed, x, n_euro)
+    if n_ind>0: block_industrie_all(occ, items, placed, n_ind)
+    start = first_free_x_int(occ)
+    if heavy and 21 <= n_euro <= 24:
+        euro_heavy(occ, items, placed, n_euro, start)
+    else:
+        dq,wq = span_int("Euro","q")
+        x = start; n = n_euro
+        if n>=2 and x+dq<=GX:
+            for y in [0, GY-wq]:
+                if free_int(occ, x,y,dq,wq):
+                    place_int(occ, items, placed, x,y,dq,wq, ICON[("Euro","q")], "Euro")
+                    n -= 1
+            x += dq
+        fill_tail_closed_euro(occ, items, placed, x, n)
     variants.append((items, placed))
 
     return variants
 
-# ---------- UI: Eingaben ----------
-st.markdown("### 📥 Manuelle Menge")
+# ---------- UI ----------
+st.subheader("📥 Manuelle Menge")
 c1,c2,c3,c4 = st.columns([1.2,1.2,1.2,1.6])
 with c1: n_euro = st.number_input("Euro (120×80)", 0, 45, 30)
 with c2: n_ind  = st.number_input("Industrie (120×100)", 0, 45, 0)
-with c3: force_long = st.checkbox("Euro nur längs erzwingen (z. B. 33)", value=False)
-with c4: _dummy = st.markdown("&nbsp;")
+with c3:
+    force_long = st.checkbox("Euro nur längs erzwingen (z. B. 33)", value=False)
+with c4:
+    heavy = st.checkbox("Schwere Ladung (21–24) – vordere Achse entlasten", value=False)
 
-# Varianten erzeugen
-variants = generate_variants(int(n_euro), int(n_ind), force_euro_long=force_long)
+variants = generate_variants(int(n_euro), int(n_ind), force_euro_long=force_long, heavy=heavy)
 
-# Navigation
+# ---------- Varianten-Navigation ----------
 if "var_idx" not in st.session_state: st.session_state.var_idx = 0
-nav1,nav2,nav3 = st.columns([1,1,3])
-with nav1:
+colL,colR,colI = st.columns([1,1,3])
+with colL:
     if st.button("◀ Variante"):
         st.session_state.var_idx = (st.session_state.var_idx - 1) % len(variants)
-with nav2:
+with colR:
     if st.button("Variante ▶"):
         st.session_state.var_idx = (st.session_state.var_idx + 1) % len(variants)
-with nav3:
+with colI:
     st.markdown(f"**Variante:** {st.session_state.var_idx+1} / {len(variants)}")
 
 items, placed = variants[st.session_state.var_idx]
 
-# ---------- Render ----------
+# ---------- Render (20 cm -> Anzeige-Raster) ----------
+disp_cols = TRAILER_L // cell_cm
+disp_rows = TRAILER_W // cell_cm
+def map_cells(n_calc):  # 20‑cm‑Zellen -> Anzeige‑Zellen
+    return max(1, round(n_calc * CALC_CELL_CM / cell_cm))
+
 html = f"""
-<div style="
-  display:grid;
-  grid-template-columns: repeat({X}, {cell_px}px);
-  grid-auto-rows: {cell_px}px;
-  gap: 1px;
-  background:#ddd; padding:4px; border:2px solid #333; width:fit-content;">
+<div style="display:grid; grid-template-columns: repeat({disp_cols}, {cell_px}px);
+            grid-auto-rows:{cell_px}px; gap: 1px; background:#ddd; padding:4px;
+            border:2px solid #333; width:fit-content;">
 """
 for (x,y,dx,dy,icon,typ) in items:
+    gx, gy = map_cells(x), map_cells(y)
+    gsx, gsy = map_cells(dx), map_cells(dy)
     html += f"""
-    <div style="
-      grid-column:{x+1}/span {dx};
-      grid-row:{y+1}/span {dy};
-      background: url('{icon}') center/contain no-repeat, #fafafa;
+    <div title='{typ}' style="
+      grid-column:{gx+1}/span {gsx};
+      grid-row:{gy+1}/span {gsy};
+      background:url('{icon}') center/contain no-repeat, #fafafa;
       border:1px solid #777;"></div>
     """
 html += "</div>"
-height = min(560, (cell_px+1)*Y + 40)
-st.components.v1.html(html, height=height, scrolling=False)
+st.components.v1.html(html, height=min(560, (cell_px+1)*disp_rows+40), scrolling=False)
 
-# ---------- Kapazitätsprüfung & Nutzlänge ----------
+# ---------- Kapazität (cm-basiert) ----------
 wanted = {"Euro": int(n_euro), "Industrie": int(n_ind)}
 missing_msgs = []
 for typ in ["Euro","Industrie"]:
@@ -267,11 +295,11 @@ for typ in ["Euro","Industrie"]:
         missing_msgs.append(f"– {missing}× {typ} passt/passen nicht mehr")
 
 used_cm = used_length_cm(items)
-st.markdown(f"**Genutzte Länge:** {used_cm} cm von {TRAILER_L} cm  (≈ {used_cm/TRAILER_L:.0%})")
+st.markdown(f"**Genutzte Länge (real):** {used_cm} cm von {TRAILER_L} cm  (≈ {used_cm/TRAILER_L:.0%})")
 
-if missing_msgs:
-    st.error("🚫 **Platz reicht nicht:**\n" + "\n".join(missing_msgs))
+if used_cm > TRAILER_L:
+    st.error("🚫 **Platz reicht nicht (Länge):** Reale Nutzlänge überschreitet 13,6 m.")
+elif missing_msgs:
+    st.error("🚫 **Platz reicht nicht (Anzahl):**\n" + "\n".join(missing_msgs))
 else:
-    st.success("✅ **Alle angeforderten Paletten passen in den Laderaum.**")
-
-st.info("Tipp: Raster 25 cm & Zoom 4 px sind die empfohlenen Grundwerte.")
+    st.success("✅ **Alle angeforderten Paletten passen in den Laderaum.")
