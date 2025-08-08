@@ -5,10 +5,10 @@ st.title("🦊 PAL Fuchs 8 – Draufsicht mit Icons (PF6-Logik)")
 
 # ---------- Trailer & Grid (PF6-Logik) ----------
 TRAILER_L, TRAILER_W = 1360, 245  # cm
-cell_cm = st.sidebar.slider("Raster (cm/Zelle)", 5, 40, 10, 5)  # unverändert
+cell_cm = st.sidebar.slider("Raster (cm/Zelle)", 5, 40, 25, 5)  # <-- 25 cm als Standard
 X, Y = TRAILER_L // cell_cm, TRAILER_W // cell_cm
 
-cell_px = st.sidebar.slider("Zellpixel (Zoom)", 4, 14, 6, 1)
+cell_px = st.sidebar.slider("Zellpixel (Zoom)", 4, 14, 4, 1)    # <-- 4 Pixel als Standard
 
 ICON = {
     ("Euro","l"): "icons/euro_l.png",
