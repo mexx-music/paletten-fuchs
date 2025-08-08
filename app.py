@@ -1,244 +1,290 @@
 import streamlit as st
 
 # =========================
-# Paletten Fuchs 7 – Update
-# Raster: Breite=4, Länge=25 (fix)
-# Presets im Pop-up, Blumenwagen verborgen bis Toggle
-# Abschluss-Logik: letzte Reihe geschlossen (3 längs bevorzugt, sonst 2 quer)
+#  PAL Fuchs 7+  (Fusion)
+#  UI (Presets-Dropdown & klare Eingaben) + Bild-Renderer (Icons)
+#  - Geschlossenes Heck: 3× längs bevorzugt, sonst 2× quer
+#  - Kapazitätsprüfung + genutzte Länge in cm
 # =========================
 
-st.set_page_config(page_title="Paletten Fuchs – v7+", layout="centered")
+st.set_page_config(page_title="🦊 Paletten Fuchs – v7+ (Streamlit)", layout="wide")
+st.title("📦 Paletten Fuchs – Sattelzug Ladeplan (Icons)")
 
-GRID_W = 4   # fix
-GRID_L = 25  # fix
+# ---------- Trailer & Grid ----------
+TRAILER_L, TRAILER_W = 1360, 245  # cm (13,6 m × 2,45 m)
 
-# ---------- Hilfsfunktionen ----------
-
-def can_use_popover():
-    """Prüft, ob st.popover verfügbar ist (neuere Streamlit-Versionen)."""
-    return hasattr(st, "popover")
-
-def layout_euro_auto_close(n_euro: int):
-    """
-    Verteilt Euro-Paletten in Reihen so, dass der hintere Abschluss geschlossen ist.
-    Reihen-Typen:
-      - '3L' = 3 Euro längs (bevorzugt), zählt 3 Paletten
-      - '2Q' = 2 Euro quer, zählt 2 Paletten
-    Strategie:
-      - So viele 3L wie möglich.
-      - Falls Rest = 1, ersetze ein 3L durch zwei 2Q (… -3 +2 +2), wenn möglich.
-      - Reihen werden in dieser Reihenfolge gelegt; die letzte belegte Reihe ist dadurch immer geschlossen (3L oder 2Q).
-    Rückgabe:
-      - list[str] mit '3L'/'2Q' in Reihenfolge (max GRID_L)
-      - verbrauchte Paletten (zur Kontrolle)
-    """
-    rows = []
-    used = 0
-    if n_euro <= 0:
-        return rows, 0
-
-    # maximale mögliche Reihen begrenzen
-    max_rows = GRID_L
-
-    # Zuerst Anzahl 3L-Reihen
-    n3 = n_euro // 3
-    r = n_euro % 3
-
-    # Restbehandlung
-    n2 = 0
-    if r == 1:
-        # 1 bleibt übrig -> versuche ein 3L in zwei 2Q umzuwandeln
-        if n3 >= 1:
-            n3 -= 1
-            n2 += 2  # ersetzt 3 Paletten durch 4 Paletten-Gruppierung (2+2), ergibt Summe korrekt: -3 + 2*2 = +1 -> deckt r==1
-        else:
-            # kein 3L zum Tauschen; dann 2Q + (1 übrig) -> geht nicht sauber.
-            # Fallback: wenn n_euro >= 2, mache nur 2Q-Reihen
-            n2 = n_euro // 2
-            n3 = 0
-            r = n_euro % 2  # könnte 1 sein -> bleibt unplatziert, wird unten erkannt
-    elif r == 2:
-        n2 += 1
-
-    # Reihen zusammenbauen: 3L bevorzugt vorne, 2Q danach
-    plan = (["3L"] * n3) + (["2Q"] * n2)
-
-    # Begrenzen auf GRID_L
-    if len(plan) > max_rows:
-        plan = plan[:max_rows]
-
-    # Verbrauch berechnen
-    used = plan.count("3L") * 3 + plan.count("2Q") * 2
-
-    return plan, used
-
-def layout_industrie(n_ind: int):
-    """
-    Industriepaletten (120x100) behandeln wir hier vereinfachend als '2 quer'-Äquivalent,
-    d.h. pro Reihe passen 2 Industrie quer (füllen Breite=4).
-    """
-    rows = []
-    used = 0
-    if n_ind <= 0:
-        return rows, 0
-
-    max_rows = GRID_L
-    n_rows = min((n_ind + 1) // 2, max_rows)  # jede Reihe: bis zu 2 Industrie
-    rows = ["2Q-I"] * n_rows
-    used = min(n_ind, n_rows * 2)
-    return rows, used
-
-def compose_rows(rows_euro, rows_ind):
-    """
-    Reihen zusammenführen:
-    - Industrie-Reihen zuerst (sind exakt 2 quer = volle Breite)
-    - dann Euro-Reihen nach dem Plan
-    """
-    rows = []
-    # 1) Industrie
-    rows.extend(rows_ind)
-    # 2) Euro
-    for r in rows_euro:
-        if len(rows) >= GRID_L:
-            break
-        rows.append(r)
-    return rows[:GRID_L]
-
-def draw_grid(rows, n_euro_used, n_euro_total, n_ind_used, n_ind_total, show_flowers=False, n_flowers=0):
-    """
-    Zeichnet das 4x25 Raster in Unicode:
-    - '3L': ▮ ▮ ▮ (drei schmale Blöcke linksbündig) + Randfüller ▯ (optisch)
-    - '2Q': ▬ ▬ (zwei breite Blöcke, decken die volle Breite = 4 Zellen)
-    - '2Q-I': ⬜ ⬜ (Industrie quer, volle Breite)
-    - Leerreihe: ▁ ▁ ▁ ▁
-    Hinweis: rein optisch; maßstabsgerecht im Sinne der vereinbarten Breite=4.
-    """
-    lines = []
-    for i in range(GRID_L):
-        if i < len(rows):
-            r = rows[i]
-            if r == "3L":
-                # drei schmale, 1 Zelle frei rechts als Abschlussfüller
-                line = "▮▮▮▯"
-            elif r == "2Q":
-                # zwei breite (= je 2 Zellen)
-                line = "▬▬"
-            elif r == "2Q-I":
-                # Industrie quer
-                line = "⬜⬜"
-            else:
-                line = "▁▁▁▁"
-        else:
-            line = "▁▁▁▁"
-        lines.append(line)
-
-    st.markdown("**Ladeplan (Draufsicht, hinten = unten):**")
-    st.code("\n".join(lines), language="text")
-
-    # Info-Balken
-    st.info(
-        f"Euro verwendet: {n_euro_used}/{n_euro_total} | Industrie verwendet: {n_ind_used}/{n_ind_total}"
-        + (f" | Blumenwagen: {n_flowers}" if show_flowers and n_flowers > 0 else "")
-    )
-
-def capacity_check(n_euro, n_ind):
-    """
-    Grobe Kapazitätsprüfung pro Reihe:
-      - 3L -> 3 Euro
-      - 2Q -> 2 Euro
-      - 2Q-I -> 2 Industrie
-    Max-Kapazität (nur Euro) wäre 25 * 3 = 75 als Obergrenze.
-    Mischen wir Euro + Industrie, reservieren wir zuerst Reihen für Industrie, dann für Euro.
-    """
-    # Erst Industrie: jede Reihe 2 Industrie
-    max_ind_rows = GRID_L
-    max_ind_cap = max_ind_rows * 2
-
-    if n_ind > max_ind_cap:
-        return False, f"Platz reicht nicht: {n_ind} Industrie > {max_ind_cap} möglich."
-
-    # Reihen übrig für Euro
-    euro_rows_possible = GRID_L - ((n_ind + 1) // 2)
-    max_euro_cap = euro_rows_possible * 3  # 3L als Obergrenze
-    if n_euro > max_euro_cap:
-        return False, f"Platz reicht nicht: {n_euro} Euro > {max_euro_cap} möglich (bei {euro_rows_possible} Euro-Reihen)."
-
-    return True, ""
-
-# ---------- UI: Header ----------
-st.title("📦 Paletten Fuchs – Sattelzug Ladeplan (Unicode)")
-
-# ---------- UI: Presets im Pop-up ----------
-open_fn = st.popover if can_use_popover() else st.expander
-with open_fn("🎛️ Presets & Schnellwahl"):
+left, right = st.columns([1,1])
+with left:
+    st.subheader("🧰 Presets & Schnellwahl")
     preset = st.selectbox(
-        "Preset wählen:",
-        [
-            "— kein Preset —",
-            "20 Euro (Auto-Abschluss)",
-            "24 Euro (Auto-Abschluss)",
-            "20 Euro + 8 Industrie",
-            "30 Euro (gemischt erlaubt)",
-        ],
-        index=0,
+        "Presets & Schnellwahl",
+        ["– manuell –", "Euro 30", "Euro 24 (schwer)", "Industrie 26", "Mix 21 Euro + 6 Industrie"],
+        index=0
     )
-    apply = st.button("Preset anwenden")
 
-# ---------- Eingaben ----------
-col_left, col_right = st.columns(2)
+with right:
+    st.subheader("⚙️ Raster / Zoom")
+    cell_cm = st.slider("Raster (cm/Zelle)", 5, 40, 10, 5)
+    cell_px = st.slider("Zellpixel (Zoom)", 4, 14, 6, 1)
 
-with col_left:
-    euro = st.number_input("Euro-Paletten (120×80)", min_value=0, max_value=200, value=20, step=1)
-    ind = st.number_input("Industrie-Paletten (120×100)", min_value=0, max_value=200, value=0, step=1)
+X, Y = TRAILER_L // cell_cm, TRAILER_W // cell_cm
+st.caption(f"**Raster:** Breite = {Y}, Länge = {X} (Zellen) • 1 Zelle = {cell_cm} cm")
 
-with col_right:
-    # Blumenwagen über kleines Icon/Toggle aus- und einblenden
-    show_flowers = st.checkbox("🌼 Blumenwagen anzeigen", value=False)
-    flowers = 0
-    if show_flowers:
-        flowers = st.number_input("Blumenwagen (optional)", min_value=0, max_value=200, value=0, step=1)
+# ---------- Icons ----------
+ICON = {
+    ("Euro","l"): "icons/euro_l.png",
+    ("Euro","q"): "icons/euro_q.png",
+    ("Industrie","q"): "icons/ind_q.png",
+    ("Blume","l"): "icons/flower_l.png",
+    ("Blume","q"): "icons/flower_q.png",
+}
 
-# Preset anwenden
-if apply and preset != "— kein Preset —":
-    if preset == "20 Euro (Auto-Abschluss)":
-        euro, ind, flowers = 20, 0, 0
-    elif preset == "24 Euro (Auto-Abschluss)":
-        euro, ind, flowers = 24, 0, 0
-    elif preset == "20 Euro + 8 Industrie":
-        euro, ind, flowers = 20, 8, 0
-    elif preset == "30 Euro (gemischt erlaubt)":
-        euro, ind, flowers = 30, 0, 0
-    st.success(f"Preset gesetzt: {preset}")
+# ---------- cm → Grid-Span ----------
+def span(name, ori):
+    if name == "Euro":        L,B = 120, 80
+    elif name == "Industrie": L,B = 120,100
+    else:                     L,B = 135, 55  # Blume
+    if name == "Industrie":
+        ori = "q"  # Regel
+    if ori == "q":   depth_cm, width_cm = B, L
+    else:            depth_cm, width_cm = L, B
+    dx = max(1, depth_cm // cell_cm)   # entlang Länge (x)
+    dy = max(1, width_cm // cell_cm)   # quer im Trailer (y)
+    return dx, dy
 
-st.markdown(f"**Raster:** Breite = {GRID_W}, Länge = {GRID_L} (fix)")
+# ---------- Belegung & Zähler ----------
+occupied = [[False]*X for _ in range(Y)]
+items = []   # (x,y,dx,dy,icon,typ)
+placed = {"Euro":0, "Industrie":0, "Blume":0}
 
-# ---------- Kapazität prüfen ----------
-ok, msg = capacity_check(euro, ind)
-if not ok:
-    st.error(msg)
-    st.stop()
+def reset_board():
+    global occupied, items, placed
+    occupied = [[False]*X for _ in range(Y)]
+    items.clear()
+    placed = {"Euro":0, "Industrie":0, "Blume":0}
 
-# ---------- Layout berechnen ----------
-rows_ind, used_ind = layout_industrie(ind)
-rows_euro, used_euro = layout_euro_auto_close(euro)
+def free(x,y,dx,dy):
+    if x<0 or y<0 or x+dx>X or y+dy>Y: return False
+    for yy in range(y,y+dy):
+        for xx in range(x,x+dx):
+            if occupied[yy][xx]: return False
+    return True
 
-# Falls Euro nicht komplett untergebracht -> Hinweis (sollte durch capacity_check selten passieren)
-if used_euro < euro:
-    st.warning(f"Nicht alle Euro-Paletten konnten platziert werden: {used_euro}/{euro}. "
-               f"Erhöhe ggf. die Länge (aktuell {GRID_L}) oder reduziere die Menge.")
+def place(x,y,dx,dy,icon,typ):
+    for yy in range(y,y+dy):
+        for xx in range(x,x+dx):
+            occupied[yy][xx] = True
+    items.append((x,y,dx,dy,icon,typ))
+    placed[typ] += 1
 
-# Reihen zusammenführen und zeichnen
-rows = compose_rows(rows_euro, rows_ind)
-draw_grid(rows, used_euro, euro, used_ind, ind, show_flowers, flowers)
+def center_y(dy): return max(0,(Y-dy)//2)
+def first_free_x():
+    for xx in range(X):
+        if any(not occupied[yy][xx] for yy in range(Y)): return xx
+    return X
 
-# ---------- Hinweise ----------
-with st.expander("ℹ️ Hinweise zur Darstellung"):
-    st.markdown("""
-- **3 längs (Euro)**: `▮▮▮▯` – drei schmale Blöcke (rechts optischer Abschlussfüller).
-- **2 quer (Euro)**: `▬▬` – zwei breite Blöcke (füllen Breite=4).
-- **Industrie quer**: `⬜⬜` – zwei breite Kästen (füllen Breite=4).
-- Leere Reihe: `▁▁▁▁`.
+def used_length_cm():
+    if not items: return 0
+    x_end = max(x+dx for (x,y,dx,dy,icon,typ) in items)
+    return x_end * cell_cm
 
-**Abschluss-Logik:** Der Algorithmus vermeidet einen Rest von 1 Euro-Palette
-und erzwingt hinten immer eine geschlossene Reihe (3 längs bevorzugt, sonst 2 quer).
-    """)
+# ---------- Heck-Abschluss-Logik (Euro) ----------
+def fill_tail_closed_euro(x_start, euro_left):
+    """Ab x_start: 3er-Reihen längs bevorzugt; falls Rest -> 2× quer Abschluss."""
+    if euro_left <= 0: return
+    dq,wq = span("Euro","q")
+    dl,wl = span("Euro","l")
+    # 2 für Querabschluss reservieren, falls nicht durch 3 teilbar
+    if euro_left % 3 == 0 or euro_left < 2:
+        cols_long = euro_left // 3
+        need_tail_q = False
+    else:
+        cols_long = max(0, (euro_left - 2)//3)
+        need_tail_q = True
+
+    lanes = [0, center_y(wl), Y-wl]
+    x = x_start
+    # 3er Längsreihen
+    for _ in range(cols_long):
+        if x+dl > X: break
+        for y in lanes:
+            if free(x,y,dl,wl):
+                place(x,y,dl,wl, ICON[("Euro","l")], "Euro")
+        x += dl
+    # 2× Querabschluss (oben & unten)
+    if need_tail_q and x+dq <= X:
+        if free(x,0,dq,wq): place(x,0,dq,wq, ICON[("Euro","q")], "Euro")
+        if free(x,Y-wq,dq,wq): place(x,Y-wq,dq,wq, ICON[("Euro","q")], "Euro")
+
+# ---------- Layouts ----------
+def industrie_all(n):
+    dq,wq = span("Industrie","q")
+    x=0
+    # ungerade → 1 mittig
+    if n%2==1:
+        y=center_y(wq)
+        if free(x,y,dq,wq): place(x,y,dq,wq, ICON[("Industrie","q")], "Industrie"); n-=1; x+=dq
+    # Paare links+rechts
+    while n>0 and x+dq<=X:
+        for y in [0, Y-wq]:
+            if n>0 and free(x,y,dq,wq): place(x,y,dq,wq, ICON[("Industrie","q")], "Industrie"); n-=1
+        x += dq
+
+def euro_30(n):
+    reset_board()
+    dq,wq = span("Euro","q")
+    x=0
+    # 1 quer mittig
+    if n>0:
+        y=center_y(wq)
+        if free(x,y,dq,wq): place(x,y,dq,wq, ICON[("Euro","q")], "Euro"); n-=1
+    x += dq
+    # 2 quer links+rechts
+    for y in [0, Y-wq]:
+        if n>0 and free(x,y,dq,wq): place(x,y,dq,wq, ICON[("Euro","q")], "Euro"); n-=1
+    x += dq
+    # Rest: geschlossenes Heck
+    fill_tail_closed_euro(x, n)
+
+def euro_24(n):
+    reset_board()
+    dq,wq = span("Euro","q")
+    x=0; yC = center_y(wq)
+    # 2× einzeln quer mittig
+    for _ in range(min(2,n)):
+        if free(x,yC,dq,wq): place(x,yC,dq,wq, ICON[("Euro","q")], "Euro"); n-=1; x+=dq
+    # 2× doppelt quer (links+rechts)
+    for _ in range(2):
+        if n<=0: break
+        for y in [0, Y-wq]:
+            if n>0 and free(x,y,dq,wq): place(x,y,dq,wq, ICON[("Euro","q")], "Euro"); n-=1
+        x += dq
+    # 1× einzel quer mittig
+    if n>0 and free(x,yC,dq,wq): place(x,yC,dq,wq, ICON[("Euro","q")], "Euro"); n-=1; x+=dq
+    # Rest: geschlossen
+    fill_tail_closed_euro(x, n)
+
+def euro_rows_from(x_start, n):
+    dl,wl = span("Euro","l")
+    x = x_start
+    lanes=[0, center_y(wl), Y-wl]
+    while n>0 and x+dl<=X:
+        for y in lanes:
+            if n>0 and free(x,y,dl,wl):
+                place(x,y,dl,wl, ICON[("Euro","l")], "Euro"); n-=1
+        x+=dl
+
+def mix_21_6():
+    reset_board()
+    industrie_all(6)
+    start = first_free_x()
+    dq,wq = span("Euro","q")
+    x = start
+    rem = 21
+    # 1 quer mittig
+    if rem>0 and x+dq<=X and free(x,center_y(wq),dq,wq):
+        place(x, center_y(wq), dq, wq, ICON[("Euro","q")], "Euro"); rem -= 1
+        x += dq
+    # 2 quer außen
+    if rem >= 2 and x+dq<=X:
+        for y in [0, Y-wq]:
+            if rem>0 and free(x,y,dq,wq):
+                place(x,y,dq,wq, ICON[("Euro","q")], "Euro"); rem -= 1
+        x += dq
+    # Rest geschlossen
+    fill_tail_closed_euro(x, rem)
+
+# ---------- UI: Mengen ----------
+st.subheader("📥 Eingabe")
+c1,c2,c3,c4 = st.columns([1.3,1.3,1.2,1.6])
+with c1:
+    n_euro = st.number_input("Euro‑Paletten (120×80)", 0, 45, 0, help="Zahl eingeben und Enter tippen")
+with c2:
+    n_ind  = st.number_input("Industrie‑Paletten (120×100)", 0, 45, 0)
+with c3:
+    flowers = st.checkbox("🌼 Blumenwagen anzeigen", value=False)
+with c4:
+    n_flow = st.number_input("Blumenwagen (135×55)", 0, 60, 0, disabled=not flowers)
+
+# ---------- Preset anwenden ----------
+if preset != "– manuell –":
+    if preset == "Euro 30": euro_30(30)
+    elif preset == "Euro 24 (schwer)": euro_24(24)
+    elif preset == "Industrie 26": reset_board(); industrie_all(26)
+    elif preset == "Mix 21 Euro + 6 Industrie": mix_21_6()
+else:
+    # Manuelle Auto-Logik wie in v7
+    reset_board()
+    if n_ind>0 and n_euro>0:
+        industrie_all(n_ind)
+        start = first_free_x()
+        dq,wq = span("Euro","q")
+        x=start
+        rem=n_euro
+        if rem>0 and x+dq<=X and free(x,center_y(wq),dq,wq):
+            place(x,center_y(wq),dq,wq, ICON[("Euro","q")], "Euro"); rem-=1; x+=dq
+        if rem>=2 and x+dq<=X:
+            for y in [0, Y-wq]:
+                if rem>0 and free(x,y,dq,wq): place(x,y,dq,wq, ICON[("Euro","q")], "Euro"); rem-=1
+            x+=dq
+        fill_tail_closed_euro(x, rem)
+    elif n_euro>=30:
+        euro_30(n_euro)
+    elif n_euro>=24:
+        euro_24(n_euro)
+    elif n_euro>0:
+        euro_rows_from(0, n_euro)
+    elif n_ind>0:
+        industrie_all(n_ind)
+
+# Blumen (optional Demo 3 quer + 2 längs vorne)
+if flowers and n_flow>0:
+    dq,wq = span("Blume","q")
+    dl,wl = span("Blume","l")
+    x=0
+    for i in range(min(3,n_flow)):
+        y=[0, center_y(wq), Y-wq][i if i<3 else 2]
+        if free(x,y,dq,wq): place(x,y,dq,wq, ICON[("Blume","q")], "Blume")
+    left=max(0,n_flow-3); x+=dq
+    if left>0 and free(x,0,dl,wl): place(x,0,dl,wl, ICON[("Blume","l")], "Blume"); left-=1
+    if left>0 and free(x,Y-wl,dl,wl): place(x,Y-wl,dl,wl, ICON[("Blume","l")], "Blume")
+
+# ---------- Render ----------
+st.subheader("🗺️ Ladeplan (Draufsicht, hinten = unten)")
+html = f"""
+<div style="
+  display:grid;
+  grid-template-columns: repeat({X}, {cell_px}px);
+  grid-auto-rows: {cell_px}px;
+  gap: 1px;
+  background:#ddd; padding:4px; border:2px solid #333; width:fit-content;">
+"""
+for (x,y,dx,dy,icon,typ) in items:
+    html += f"""
+    <div style="
+      grid-column:{x+1}/span {dx};
+      grid-row:{y+1}/span {dy};
+      background: url('{icon}') center/contain no-repeat, #fafafa;
+      border:1px solid #777;"></div>
+    """
+html += "</div>"
+height = min(560, (cell_px+1)*Y + 40)
+st.components.v1.html(html, height=height, scrolling=False)
+
+# ---------- Kapazitätsprüfung & Nutzlänge ----------
+wanted_euro = n_euro if preset == "– manuell –" else {"Euro 30":30,"Euro 24 (schwer)":24,"Industrie 26":0,"Mix 21 Euro + 6 Industrie":21}[preset]
+wanted_ind  = n_ind  if preset == "– manuell –" else {"Euro 30":0,"Euro 24 (schwer)":0,"Industrie 26":26,"Mix 21 Euro + 6 Industrie":6}[preset]
+
+used_cm = used_length_cm()
+st.markdown(f"**Genutzte Länge:** {used_cm} cm von {TRAILER_L} cm  (≈ {used_cm/TRAILER_L:.0%})")
+
+missing_msgs = []
+if wanted_euro > placed["Euro"]:
+    missing_msgs.append(f"– {wanted_euro - placed['Euro']}× Euro passen nicht")
+if wanted_ind  > placed["Industrie"]:
+    missing_msgs.append(f"– {wanted_ind  - placed['Industrie']}× Industrie passen nicht")
+
+if missing_msgs:
+    st.error("🚫 **Platz reicht nicht:**\n" + "\n".join(missing_msgs))
+else:
+    st.success("✅ **Alle angeforderten Paletten passen in den Laderaum.**")
