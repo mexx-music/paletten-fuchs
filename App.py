@@ -7,7 +7,7 @@ st.title("📦 Ladeplan Sattel – Mehrere Palettentypen")
 
 # 🚛 Trailergröße
 trailer_length = 1360  # cm
-trailer_width = 245    # cm
+trailer_width = 245  # cm
 
 # 🔢 Eingabe mehrerer Palettentypen
 st.markdown("### ➕ Palettentypen eingeben")
@@ -20,22 +20,40 @@ for idx in range(3):  # max. 3 Typen für diese Version
         aktiv = st.checkbox(f"Aktivieren", value=(idx == 0))
         if aktiv:
             typ_name = st.text_input(f"Name Typ {idx + 1}", value=f"Typ {idx + 1}")
-            pal_l = st.number_input(f"Länge (cm) – {typ_name}", min_value=50, max_value=200, value=120, key=f"l_{idx}")
-            pal_b = st.number_input(f"Breite (cm) – {typ_name}", min_value=50, max_value=150, value=80, key=f"b_{idx}")
-            anzahl = st.number_input(f"Anzahl – {typ_name}", min_value=1, max_value=40, value=10, key=f"a_{idx}")
-            gewicht = st.number_input(f"Gewicht je Palette (kg) – {typ_name}", min_value=0, max_value=2000, value=150, key=f"g_{idx}")
-            richtung = st.radio(f"Ausrichtung – {typ_name}", ["Längs (Längsseite nach vorne)", "Quer (Breitseite nach vorne)"], key=f"r_{idx}")
+            pal_l = st.number_input(
+                f"Länge (cm) – {typ_name}", min_value=50, max_value=200, value=120, key=f"l_{idx}"
+            )
+            pal_b = st.number_input(
+                f"Breite (cm) – {typ_name}", min_value=50, max_value=150, value=80, key=f"b_{idx}"
+            )
+            anzahl = st.number_input(
+                f"Anzahl – {typ_name}", min_value=1, max_value=40, value=10, key=f"a_{idx}"
+            )
+            gewicht = st.number_input(
+                f"Gewicht je Palette (kg) – {typ_name}",
+                min_value=0,
+                max_value=2000,
+                value=150,
+                key=f"g_{idx}",
+            )
+            richtung = st.radio(
+                f"Ausrichtung – {typ_name}",
+                ["Längs (Längsseite nach vorne)", "Quer (Breitseite nach vorne)"],
+                key=f"r_{idx}",
+            )
             if richtung == "Quer":
                 pal_l, pal_b = pal_b, pal_l
 
-            palette_daten.append({
-                "name": typ_name,
-                "l": pal_l,
-                "b": pal_b,
-                "anzahl": anzahl,
-                "gewicht": gewicht,
-                "farbe": typ_farben[idx % len(typ_farben)]
-            })
+            palette_daten.append(
+                {
+                    "name": typ_name,
+                    "l": pal_l,
+                    "b": pal_b,
+                    "anzahl": anzahl,
+                    "gewicht": gewicht,
+                    "farbe": typ_farben[idx % len(typ_farben)],
+                }
+            )
 
 # 🧠 Belegung berechnen
 st.markdown("### 🗺️ Ladeplan (Draufsicht)")
@@ -47,6 +65,7 @@ cm_per_cell = 10
 cells_x = trailer_length // cm_per_cell
 cells_y = trailer_width // cm_per_cell
 belegung = [[None for _ in range(cells_x)] for _ in range(cells_y)]
+
 
 def finde_freien_platz(pal_l, pal_b):
     pal_x = pal_l // cm_per_cell
@@ -64,6 +83,7 @@ def finde_freien_platz(pal_l, pal_b):
             if frei:
                 return x, y
     return None, None
+
 
 log = []
 gesamtgewicht = 0
@@ -86,7 +106,11 @@ for typ in palette_daten:
     log.append(f"✅ {geladen}× {typ['name']} geladen.")
 
 # 📊 Visualisierung
-html = "<div style='display: grid; grid-template-columns: " + " ".join(["10px"] * cells_x) + "; gap:1px;'>"
+html = (
+    "<div style='display: grid; grid-template-columns: "
+    + " ".join(["10px"] * cells_x)
+    + "; gap:1px;'>"
+)
 for row in belegung:
     for zelle in row:
         farbe = zelle if zelle else "#ddd"

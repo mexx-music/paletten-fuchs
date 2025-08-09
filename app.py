@@ -22,22 +22,29 @@ ICON = {
     ("Blume", "q"): "icons/flower_q.png",
 }
 
+
 def icon_or_placeholder(key: tuple) -> str:
     path = ICON[key]
     if os.path.exists(path):
         return path
     # Inline-SVG-Platzhalter
-    return "data:image/svg+xml;utf8," \
-           "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'>" \
-           "<rect width='100%' height='100%' fill='%23f0f0f0'/>" \
-           "<rect x='6' y='6' width='28' height='28' fill='%23c0c0c0' stroke='%23777' stroke-width='1'/>" \
-           "</svg>"
+    return (
+        "data:image/svg+xml;utf8,"
+        "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'>"
+        "<rect width='100%' height='100%' fill='%23f0f0f0'/>"
+        "<rect x='6' y='6' width='28' height='28' fill='%23c0c0c0' stroke='%23777' stroke-width='1'/>"
+        "</svg>"
+    )
+
 
 # ---------- Hilfsfunktionen ----------
 def span(name, ori):
-    if name == "Euro":        L, B = 120, 80
-    elif name == "Industrie": L, B = 120, 100
-    else:                     L, B = 135, 55  # Blume (Demo)
+    if name == "Euro":
+        L, B = 120, 80
+    elif name == "Industrie":
+        L, B = 120, 100
+    else:
+        L, B = 135, 55  # Blume (Demo)
     if name == "Industrie":
         ori = "q"  # Industrie immer quer
     if ori == "q":
@@ -48,29 +55,35 @@ def span(name, ori):
     dy = max(1, width_cm // cell_cm)
     return dx, dy
 
-def center_y(dy): return max(0, (Y - dy) // 2)
+
+def center_y(dy):
+    return max(0, (Y - dy) // 2)
+
 
 def empty_board():
-    occupied = [[False]*X for _ in range(Y)]
+    occupied = [[False] * X for _ in range(Y)]
     items = []
     placed = {"Euro": 0, "Industrie": 0, "Blume": 0}
     return occupied, items, placed
 
+
 def free(occ, x, y, dx, dy):
-    if x < 0 or y < 0 or x+dx > X or y+dy > Y:
+    if x < 0 or y < 0 or x + dx > X or y + dy > Y:
         return False
-    for yy in range(y, y+dy):
-        for xx in range(x, x+dx):
+    for yy in range(y, y + dy):
+        for xx in range(x, x + dx):
             if occ[yy][xx]:
                 return False
     return True
 
+
 def place(occ, items, placed, x, y, dx, dy, key, typ):
-    for yy in range(y, y+dy):
-        for xx in range(x, x+dx):
+    for yy in range(y, y + dy):
+        for xx in range(x, x + dx):
             occ[yy][xx] = True
     items.append((x, y, dx, dy, icon_or_placeholder(key), typ))
     placed[typ] += 1
+
 
 def first_free_x(occ):
     for xx in range(X):
@@ -78,11 +91,13 @@ def first_free_x(occ):
             return xx
     return X
 
+
 def used_length_cm(items):
     if not items:
         return 0
-    x_end = max(x+dx for (x, y, dx, dy, icon, typ) in items)
+    x_end = max(x + dx for (x, y, dx, dy, icon, typ) in items)
     return x_end * cell_cm
+
 
 # ---------- Heckabschluss Euro ----------
 def fill_tail_closed_euro(occ, items, placed, x_start, euro_left):
@@ -95,10 +110,10 @@ def fill_tail_closed_euro(occ, items, placed, x_start, euro_left):
         cols_long = euro_left // 3
         need_tail_q = False
     else:
-        cols_long = max(0, (euro_left - 2)//3)
+        cols_long = max(0, (euro_left - 2) // 3)
         need_tail_q = True
 
-    lanes = [0, center_y(wl), Y-wl]
+    lanes = [0, center_y(wl), Y - wl]
     x = x_start
     for _ in range(cols_long):
         if x + dl > X:
@@ -110,8 +125,9 @@ def fill_tail_closed_euro(occ, items, placed, x_start, euro_left):
     if need_tail_q and x + dq <= X:
         if free(occ, x, 0, dq, wq):
             place(occ, items, placed, x, 0, dq, wq, ("Euro", "q"), "Euro")
-        if free(occ, x, Y-wq, dq, wq):
-            place(occ, items, placed, x, Y-wq, dq, wq, ("Euro", "q"), "Euro")
+        if free(occ, x, Y - wq, dq, wq):
+            place(occ, items, placed, x, Y - wq, dq, wq, ("Euro", "q"), "Euro")
+
 
 # ---------- Bausteine ----------
 def block_industrie_all(occ, items, placed, n):
@@ -124,16 +140,17 @@ def block_industrie_all(occ, items, placed, n):
             n -= 1
             x += dq
     while n > 0 and x + dq <= X:
-        for y in [0, Y-wq]:
+        for y in [0, Y - wq]:
             if n > 0 and free(occ, x, y, dq, wq):
                 place(occ, items, placed, x, y, dq, wq, ("Industrie", "q"), "Industrie")
                 n -= 1
         x += dq
     return x
 
+
 def block_euro_only_long(occ, items, placed, x_start, n):
     dl, wl = span("Euro", "l")
-    lanes = [0, center_y(wl), Y-wl]
+    lanes = [0, center_y(wl), Y - wl]
     x = x_start
     while n > 0 and x + dl <= X:
         for y in lanes:
@@ -141,6 +158,7 @@ def block_euro_only_long(occ, items, placed, x_start, n):
                 place(occ, items, placed, x, y, dl, wl, ("Euro", "l"), "Euro")
                 n -= 1
         x += dl
+
 
 def block_euro_cross_then_long(occ, items, placed, x_start, n):
     dq, wq = span("Euro", "q")
@@ -151,16 +169,17 @@ def block_euro_cross_then_long(occ, items, placed, x_start, n):
         n -= 1
         x += dq
     if n >= 2 and x + dq <= X:
-        for y in [0, Y-wq]:
+        for y in [0, Y - wq]:
             if n > 0 and free(occ, x, y, dq, wq):
                 place(occ, items, placed, x, y, dq, wq, ("Euro", "q"), "Euro")
                 n -= 1
         x += dq
     fill_tail_closed_euro(occ, items, placed, x, n)
 
+
 def block_euro_long_then_cross_tail(occ, items, placed, x_start, n):
     dl, wl = span("Euro", "l")
-    lanes = [0, center_y(wl), Y-wl]
+    lanes = [0, center_y(wl), Y - wl]
     x = x_start
     col_cap = 3
     while n >= col_cap and x + span("Euro", "l")[0] <= X:
@@ -170,6 +189,7 @@ def block_euro_long_then_cross_tail(occ, items, placed, x_start, n):
         n -= col_cap
         x += dl
     fill_tail_closed_euro(occ, items, placed, x, n)
+
 
 # ---------- Varianten-Generator ----------
 def generate_variants(n_euro, n_ind, force_euro_long=False):
@@ -204,7 +224,7 @@ def generate_variants(n_euro, n_ind, force_euro_long=False):
     dq, wq = span("Euro", "q")
     x = start
     if n_euro >= 2 and x + dq <= X:
-        for y in [0, Y-wq]:
+        for y in [0, Y - wq]:
             if free(occ, x, y, dq, wq):
                 place(occ, items, placed, x, y, dq, wq, ("Euro", "q"), "Euro")
                 n_euro -= 1
@@ -213,13 +233,18 @@ def generate_variants(n_euro, n_ind, force_euro_long=False):
     variants.append((items, placed))
     return variants
 
+
 # ---------- UI: Eingaben ----------
 st.markdown("### 📥 Manuelle Menge")
 c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 1.6])
-with c1: n_euro = st.number_input("Euro (120×80)", 0, 45, 30)
-with c2: n_ind = st.number_input("Industrie (120×100)", 0, 45, 0)
-with c3: force_long = st.checkbox("Euro nur längs erzwingen (z. B. 33)", value=False)
-with c4: _dummy = st.markdown("&nbsp;")
+with c1:
+    n_euro = st.number_input("Euro (120×80)", 0, 45, 30)
+with c2:
+    n_ind = st.number_input("Industrie (120×100)", 0, 45, 0)
+with c3:
+    force_long = st.checkbox("Euro nur längs erzwingen (z. B. 33)", value=False)
+with c4:
+    _dummy = st.markdown("&nbsp;")
 
 # Varianten erzeugen
 variants = generate_variants(int(n_euro), int(n_ind), force_euro_long=force_long)
@@ -248,7 +273,7 @@ html = f"""
   gap: 1px;
   background:#ddd; padding:4px; border:2px solid #333; width:fit-content;">
 """
-for (x, y, dx, dy, icon, typ) in items:
+for x, y, dx, dy, icon, typ in items:
     html += f"""
     <div title="{typ}"
          style="
@@ -259,7 +284,7 @@ for (x, y, dx, dy, icon, typ) in items:
     </div>
     """
 html += "</div>"
-height = min(560, (cell_px+1)*Y + 40)
+height = min(560, (cell_px + 1) * Y + 40)
 st.components.v1.html(html, height=height, scrolling=False)
 
 # ---------- Kapazitätsprüfung & Nutzlänge ----------
@@ -281,11 +306,13 @@ else:
 # ---------- Debug-Ausgabe ----------
 debug = st.sidebar.checkbox("🔧 Debug anzeigen", False)
 if debug:
-    st.write({
-        "XxY": (X, Y),
-        "Eingabe": {"Euro": int(n_euro), "Industrie": int(n_ind)},
-        "Varianten": len(variants),
-        "Items": len(items)
-    })
+    st.write(
+        {
+            "XxY": (X, Y),
+            "Eingabe": {"Euro": int(n_euro), "Industrie": int(n_ind)},
+            "Varianten": len(variants),
+            "Items": len(items),
+        }
+    )
 
 st.info("Tipp: Raster 25 cm & Zoom 4 px sind die empfohlenen Grundwerte.")
