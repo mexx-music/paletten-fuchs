@@ -1,0 +1,12 @@
+# Einheitliche Zeilenenden & Encoding
+* text=auto eol=lf working-tree-encoding=UTF-8
+
+# Python-Dateien sicher mit LF
+*.py text eol=lf
+
+# Bilder/Binaries niemals anfassen
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
