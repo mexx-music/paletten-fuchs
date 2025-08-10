@@ -1,15 +1,15 @@
 import math
 import streamlit as st
 
-st.set_page_config(page_title="🦊 PAL Fuchs 8 – Varianten (Fix: Ceil + echte Längen)", layout="wide")
-st.title("🦊 PAL Fuchs – Draufsicht mit Icons & Varianten")
+st.set_page_config(page_title="🦊 PAL Fuchs 8 – Varianten (Real-Logik)", layout="wide")
+st.title("🦊 PAL Fuchs – Draufsicht mit Icons & Varianten (Real-Logik)")
 
 # ---------- Trailer & Grid ----------
 TRAILER_L, TRAILER_W = 1360, 245  # cm
 
-# Wunsch-Defaults: Raster 25 cm, Zoom 4 px
-cell_cm = st.sidebar.slider("Raster (cm/Zelle)", 5, 40, 25, 5)
-cell_px = st.sidebar.slider("Zellpixel (Zoom)", 4, 14, 4, 1)
+# Empfohlen: Raster 40 cm (120=3 Zellen, 80=2 Zellen → exakte Darstellung)
+cell_cm = st.sidebar.slider("Raster (cm/Zelle)", 20, 50, 40, 5)
+cell_px = st.sidebar.slider("Zellpixel (Zoom)", 4, 16, 4, 1)
 
 X, Y = TRAILER_L // cell_cm, TRAILER_W // cell_cm
 
@@ -18,233 +18,247 @@ ICON = {
     ("Euro","l"): "icons/euro_l.png",
     ("Euro","q"): "icons/euro_q.png",
     ("Industrie","q"): "icons/ind_q.png",
-    ("Blume","l"): "icons/flower_l.png",
-    ("Blume","q"): "icons/flower_q.png",
 }
 
-# ---------- Hilfsfunktionen ----------
-def dims_cm(name):
-    if name == "Euro":        return 120, 80   # L x B
-    elif name == "Industrie": return 120,100
-    else:                     return 135, 55   # Blume (Demo)
+# ---------- Maße & Raster-Span ----------
+def euro_dims(ori):
+    # Rückgabe: (depth_cm_along_length, width_cm_across_trailer)
+    if ori == "q":   # quer: 80 Tiefe, 120 Breite
+        return 80, 120
+    else:            # längs: 120 Tiefe, 80 Breite
+        return 120, 80
 
-def span(name, ori):
-    L,B = dims_cm(name)
-    # Industrie immer quer
-    if name == "Industrie":
-        ori = "q"
-    # Tiefe (entlang Trailer-Länge), Breite (quer im Trailer)
-    if ori == "q":
-        depth_cm, width_cm = B, L
-    else:
-        depth_cm, width_cm = L, B
-    # WICHTIG: ceil statt floor, damit nichts zu klein gerastert wird
-    dx = max(1, math.ceil(depth_cm / cell_cm))   # entlang Länge (x)
-    dy = max(1, math.ceil(width_cm / cell_cm))   # quer (y)
-    return dx, dy, depth_cm, width_cm, ori
+def ind_dims():      # Industrie immer quer
+    return 100, 120   # 100 Tiefe, 120 Breite (120x100)
+
+def span_cm_to_cells(depth_cm, width_cm):
+    # Ceil-Rasterung (nichts wird zu klein gerendert)
+    dx = max(1, math.ceil(depth_cm / cell_cm))
+    dy = max(1, math.ceil(width_cm / cell_cm))
+    return dx, dy
 
 def center_y(dy): 
     return max(0, (Y - dy) // 2)
 
+# ---------- Board ----------
 def empty_board():
     occupied = [[False]*X for _ in range(Y)]
-    # Speichere reale Tiefe in cm & Orientierung für echte Nutzlänge
-    # item: (x,y,dx,dy,icon,typ,depth_cm,ori)
+    # items: (x, y, dx, dy, icon, typ, depth_cm_real)
     items = []
-    placed = {"Euro":0, "Industrie":0, "Blume":0}
+    placed = {"Euro": 0, "Industrie": 0}
     return occupied, items, placed
 
-def free(occ, x,y,dx,dy):
-    if x<0 or y<0 or x+dx>X or y+dy>Y: 
+def free(occ, x, y, dx, dy):
+    if x < 0 or y < 0 or x + dx > X or y + dy > Y:
         return False
-    for yy in range(y,y+dy):
-        for xx in range(x,x+dx):
-            if occ[yy][xx]: 
+    for yy in range(y, y + dy):
+        for xx in range(x, x + dx):
+            if occ[yy][xx]:
                 return False
     return True
 
-def place(occ, items, placed, x,y,dx,dy,icon,typ,depth_cm,ori):
-    for yy in range(y,y+dy):
-        for xx in range(x,x+dx):
+def place(occ, items, placed, x, y, dx, dy, icon, typ, depth_cm_real):
+    for yy in range(y, y + dy):
+        for xx in range(x, x + dx):
             occ[yy][xx] = True
-    items.append((x,y,dx,dy,icon,typ,depth_cm,ori))
+    items.append((x, y, dx, dy, icon, typ, depth_cm_real))
     placed[typ] += 1
 
-def first_free_x(occ):
-    for xx in range(X):
-        if any(not occ[yy][xx] for yy in range(Y)): 
-            return xx
-    return X
-
 def used_length_cm_true(items):
-    """Echte Nutzlänge in cm (linke Kante x*cell_cm + reale Tiefe)"""
-    if not items: 
+    """Maximale reale Ausdehnung in cm (Start in Zellen * Raster + reale Tiefe)."""
+    if not items:
         return 0
     x_end_cm = 0
-    for (x,y,dx,dy,icon,typ,depth_cm,ori) in items:
-        right_edge = x * cell_cm + depth_cm
-        if right_edge > x_end_cm:
-            x_end_cm = right_edge
+    for (x, y, dx, dy, icon, typ, depth_cm) in items:
+        right = x * cell_cm + depth_cm
+        if right > x_end_cm:
+            x_end_cm = right
     return min(x_end_cm, TRAILER_L)
 
-# ---------- Heckabschluss Euro: 3 längs-Spuren, Rest=2 quer ----------
-def fill_tail_closed_euro(occ, items, placed, x_start, euro_left):
-    if euro_left <= 0: 
-        return
-    dq,wq,dq_cm,_,_ = span("Euro","q")
-    dl,wl,dl_cm,_,_ = span("Euro","l")
+# ---------- Bausteine: Euro quer / längs & Industrie quer ----------
+def place_euro_row_q(occ, items, placed, x):
+    depth_cm, width_cm = euro_dims("q")  # 80, 120
+    dx, dy = span_cm_to_cells(depth_cm, width_cm)
+    y_left = 0
+    y_right = Y - dy
+    ok = True
+    for y in [y_left, y_right]:
+        if free(occ, x, y, dx, dy):
+            place(occ, items, placed, x, y, dx, dy, ICON[("Euro","q")], "Euro", depth_cm)
+        else:
+            ok = False
+    return ok, x + dx  # neue x-Position (nächste Querreihe)
 
-    if euro_left % 3 == 0 or euro_left < 2:
-        cols_long = euro_left // 3
-        need_tail_q = False
-    else:
-        cols_long = max(0, (euro_left - 2)//3)
-        need_tail_q = True
+def place_euro_col_l(occ, items, placed, x):
+    depth_cm, width_cm = euro_dims("l")  # 120, 80
+    dx, dy = span_cm_to_cells(depth_cm, width_cm)
+    lanes = [0, center_y(dy), Y - dy]
+    ok = True
+    for y in lanes:
+        if free(occ, x, y, dx, dy):
+            place(occ, items, placed, x, y, dx, dy, ICON[("Euro","l")], "Euro", depth_cm)
+        else:
+            ok = False
+    return ok, x + dx
 
-    lanes = [0, center_y(wl), Y-wl]
+def place_ind_q(occ, items, placed, x, count):
+    depth_cm, width_cm = ind_dims()     # 100, 120
+    dx, dy = span_cm_to_cells(depth_cm, width_cm)
+    # ungerade: 1 mittig vorne
+    if count % 2 == 1:
+        y = center_y(dy)
+        if free(occ, x, y, dx, dy):
+            place(occ, items, placed, x, y, dx, dy, ICON[("Industrie","q")], "Industrie", depth_cm)
+            count -= 1
+            x += dx
+    # Paare links/rechts
+    while count > 0 and x + dx <= X:
+        for y in [0, Y - dy]:
+            if count > 0 and free(occ, x, y, dx, dy):
+                place(occ, items, placed, x, y, dx, dy, ICON[("Industrie","q")], "Industrie", depth_cm)
+                count -= 1
+        x += dx
+    return x
+
+# ---------- Euro-Varianten: echte Logik ----------
+def euro_variant_auto_max_q_then_l(occ, items, placed, x_start, n):
+    """Maximiere Querreihen (2 Pal/80cm) unter der Nebenbedingung,
+       dass der Rest als Längsspalten (3 Pal/120cm) noch reinpasst."""
+    # Kapazitäten in der Länge (cm)
+    max_q_by_len = TRAILER_L // 80
+    # Wir probieren von oben nach unten (so viele Querreihen wie möglich)
+    best = None
+    for q_rows in range(min(n // 2, max_q_by_len), -1, -1):
+        used_pals_q = 2 * q_rows
+        rem_pals = n - used_pals_q
+        rem_len = TRAILER_L - q_rows * 80
+        need_l_cols = math.ceil(rem_pals / 3) if rem_pals > 0 else 0
+        if need_l_cols * 120 <= rem_len:
+            best = (q_rows, need_l_cols)
+            break
+    if best is None:
+        best = (0, math.ceil(n / 3))
+    q_rows, l_cols = best
+
     x = x_start
-    # 3er Längsreihen
-    for _ in range(cols_long):
-        if x + dl > X: break
-        for y in lanes:
-            if free(occ, x,y,dl,wl):
-                place(occ, items, placed, x,y,dl,wl, ICON[("Euro","l")], "Euro", dl_cm, "l")
-        x += dl
-    # 2× Querabschluss
-    if need_tail_q and x + dq <= X:
-        if free(occ, x,0,dq,wq):
-            place(occ, items, placed, x,0,dq,wq, ICON[("Euro","q")], "Euro", dq_cm, "q")
-        if free(occ, x,Y-wq,dq,wq):
-            place(occ, items, placed, x,Y-wq,dq,wq, ICON[("Euro","q")], "Euro", dq_cm, "q")
+    # Querreihen setzen
+    for _ in range(q_rows):
+        ok, x = place_euro_row_q(occ, items, placed, x)
 
-# ---------- Bausteine ----------
-def block_industrie_all(occ, items, placed, n):
-    dq,wq,dq_cm,_,_ = span("Industrie","q")
-    x=0
-    # ungerade → 1 mittig zuerst
-    if n%2==1:
-        y=center_y(wq)
-        if free(occ, x,y,dq,wq):
-            place(occ, items, placed, x,y,dq,wq, ICON[("Industrie","q")], "Industrie", dq_cm, "q")
-            n -= 1; x += dq
-    # Paare links+rechts
-    while n>0 and x+dq<=X:
-        for y in [0, Y-wq]:
-            if n>0 and free(occ, x,y,dq,wq):
-                place(occ, items, placed, x,y,dq,wq, ICON[("Industrie","q")], "Industrie", dq_cm, "q")
-                n -= 1
-        x += dq
-    return x  # nächste freie Spalte (ungefähr)
+    # Längsspalten setzen
+    remaining = n - 2 * q_rows
+    for _ in range(l_cols):
+        if remaining <= 0:
+            break
+        ok, nx = place_euro_col_l(occ, items, placed, x)
+        placed_now = min(3, remaining)
+        remaining -= placed_now
+        x = nx
 
-def block_euro_only_long(occ, items, placed, x_start, n):
-    dl,wl,dl_cm,_,_ = span("Euro","l")
-    lanes = [0, center_y(wl), Y-wl]
+    # Falls kleiner Rest (<120 cm) und noch 2 Pal fehlen → eine Querreihe versuchen
+    if remaining > 0:
+        ok, x = place_euro_row_q(occ, items, placed, x)
+
+def euro_variant_auto_max_l_then_q(occ, items, placed, x_start, n):
+    """Erst möglichst viele Längsspalten, Rest mit Querreihen auffüllen."""
+    max_l_by_len = TRAILER_L // 120
+    best = None
+    for l_cols in range(min(math.ceil(n/3), max_l_by_len), -1, -1):
+        used_pals_l = 3 * l_cols
+        rem_pals = n - used_pals_l
+        rem_len = TRAILER_L - l_cols * 120
+        need_q_rows = math.ceil(rem_pals / 2) if rem_pals > 0 else 0
+        if need_q_rows * 80 <= rem_len:
+            best = (l_cols, need_q_rows)
+            break
+    if best is None:
+        best = (0, math.ceil(n / 2))
+    l_cols, q_rows = best
+
     x = x_start
-    while n>0 and x+dl<=X:
-        for y in lanes:
-            if n>0 and free(occ, x,y,dl,wl):
-                place(occ, items, placed, x,y,dl,wl, ICON[("Euro","l")], "Euro", dl_cm, "l")
-                n -= 1
-        x += dl
+    remaining = n
+    # Längs zuerst
+    for _ in range(l_cols):
+        if remaining <= 0: break
+        ok, nx = place_euro_col_l(occ, items, placed, x)
+        placed_now = min(3, remaining); remaining -= placed_now
+        x = nx
+    # Quer danach
+    for _ in range(q_rows):
+        if remaining <= 0: break
+        ok, x = place_euro_row_q(occ, items, placed, x)
+        placed_now = min(2, remaining); remaining -= placed_now
 
-def block_euro_cross_then_long(occ, items, placed, x_start, n):
-    dq,wq,dq_cm,_,_ = span("Euro","q")
-    dl,wl,dl_cm,_,_ = span("Euro","l")
+def euro_variant_all_long(occ, items, placed, x_start, n):
     x = x_start
-    # 1 quer mittig
-    if n>0 and x+dq<=X and free(occ, x,center_y(wq),dq,wq):
-        place(occ, items, placed, x,center_y(wq),dq,wq, ICON[("Euro","q")], "Euro", dq_cm, "q")
-        n -= 1; x += dq
-    # 2 quer außen
-    if n>=2 and x+dq<=X:
-        for y in [0, Y-wq]:
-            if n>0 and free(occ, x,y,dq,wq):
-                place(occ, items, placed, x,y,dq,wq, ICON[("Euro","q")], "Euro", dq_cm, "q")
-                n -= 1
-        x += dq
-    # Rest: geschlossen
-    fill_tail_closed_euro(occ, items, placed, x, n)
+    remaining = n
+    while remaining > 0:
+        ok, nx = place_euro_col_l(occ, items, placed, x)
+        placed_now = min(3, remaining)
+        remaining -= placed_now
+        x = nx
 
-def block_euro_long_then_cross_tail(occ, items, placed, x_start, n):
-    # erst rein längs in 3er-Spuren, am Ende ggf. 2 quer (geschlossen)
-    dl,wl,dl_cm,_,_ = span("Euro","l")
-    lanes = [0, center_y(wl), Y-wl]
+def euro_variant_all_cross_with_tail(occ, items, placed, x_start, n):
+    # so viele Querreihen wie möglich, evtl. 1–2 Längsspalten am Ende, falls 1–3 Stück übrig
     x = x_start
-    col_cap = 3
-    while n >= col_cap and x+dl <= X:
-        for y in lanes:
-            if free(occ, x,y,dl,wl):
-                place(occ, items, placed, x,y,dl,wl, ICON[("Euro","l")], "Euro", dl_cm, "l")
-        n -= col_cap
-        x += dl
-    # Rest geschlossen
-    fill_tail_closed_euro(occ, items, placed, x, n)
+    full_q = min(n // 2, TRAILER_L // 80)
+    for _ in range(full_q):
+        ok, x = place_euro_row_q(occ, items, placed, x)
+    remaining = n - 2 * full_q
+    while remaining > 0:
+        ok, nx = place_euro_col_l(occ, items, placed, x)
+        placed_now = min(3, remaining); remaining -= placed_now
+        x = nx
 
 # ---------- Varianten-Generator ----------
-def generate_variants(n_euro, n_ind, force_euro_long=False):
+def generate_variants(n_euro, n_ind):
     variants = []
 
-    # Variante 1: Industrie → Euro (quer+quer+geschlossen)
+    # Variante 1: Industrie → Euro (max quer, dann längs)
     occ, items, placed = empty_board()
-    if n_ind>0:
-        block_industrie_all(occ, items, placed, n_ind)
-    start = first_free_x(occ)
-    if force_euro_long:
-        block_euro_only_long(occ, items, placed, start, n_euro)
-    else:
-        block_euro_cross_then_long(occ, items, placed, start, n_euro)
+    x = 0
+    if n_ind > 0:
+        x = place_ind_q(occ, items, placed, x, n_ind)
+    euro_variant_auto_max_q_then_l(occ, items, placed, x, n_euro)
     variants.append((items, placed))
 
-    # Variante 2: Industrie → Euro (längs zuerst, dann geschlossener Abschluss)
+    # Variante 2: Industrie → Euro (max längs, dann quer)
     occ, items, placed = empty_board()
-    if n_ind>0:
-        block_industrie_all(occ, items, placed, n_ind)
-    start = first_free_x(occ)
-    block_euro_long_then_cross_tail(occ, items, placed, start, n_euro)
+    x = 0
+    if n_ind > 0:
+        x = place_ind_q(occ, items, placed, x, n_ind)
+    euro_variant_auto_max_l_then_q(occ, items, placed, x, n_euro)
     variants.append((items, placed))
 
-    # Variante 3: Euro-only längs über alles (für z.B. 33 längs)
+    # Variante 3: Euro-only längs
     occ, items, placed = empty_board()
-    if n_ind>0:
-        block_industrie_all(occ, items, placed, n_ind)
-        start = first_free_x(occ)
-        block_euro_only_long(occ, items, placed, start, n_euro)
-    else:
-        block_euro_only_long(occ, items, placed, 0, n_euro)
+    x = 0
+    if n_ind > 0:
+        x = place_ind_q(occ, items, placed, x, n_ind)
+    euro_variant_all_long(occ, items, placed, x, n_euro)
     variants.append((items, placed))
 
-    # Variante 4: Euro quer-Start doppelt (außen), dann längs, dann Tail
+    # Variante 4: Euro-only quer (mit Längs-Tail falls nötig)
     occ, items, placed = empty_board()
-    if n_ind>0:
-        block_industrie_all(occ, items, placed, n_ind)
-    start = first_free_x(occ)
-    dq,wq,dq_cm,_,_ = span("Euro","q")
-    x = start
-    if n_euro>=2 and x+dq<=X:
-        for y in [0, Y-wq]:
-            if n_euro>0 and free(occ, x,y,dq,wq):
-                place(occ, items, placed, x,y,dq,wq, ICON[("Euro","q")], "Euro", dq_cm, "q")
-                n_euro -= 1
-        x += dq
-    fill_tail_closed_euro(occ, items, placed, x, n_euro)
+    x = 0
+    if n_ind > 0:
+        x = place_ind_q(occ, items, placed, x, n_ind)
+    euro_variant_all_cross_with_tail(occ, items, placed, x, n_euro)
     variants.append((items, placed))
 
     return variants
 
-# ---------- UI: Eingaben ----------
+# ---------- UI ----------
 st.markdown("### 📥 Manuelle Menge")
-c1,c2,c3,c4 = st.columns([1.2,1.2,1.2,1.6])
-with c1: n_euro = st.number_input("Euro (120×80)", 0, 45, 30)
+c1, c2 = st.columns([1.2, 1.2])
+with c1: n_euro = st.number_input("Euro (120×80)", 0, 45, 33)
 with c2: n_ind  = st.number_input("Industrie (120×100)", 0, 45, 0)
-with c3: force_long = st.checkbox("Euro nur längs erzwingen (z. B. 33)", value=False)
-with c4: _dummy = st.markdown("&nbsp;")
 
-# Varianten erzeugen
-variants = generate_variants(int(n_euro), int(n_ind), force_euro_long=force_long)
+variants = generate_variants(int(n_euro), int(n_ind))
 
 # Navigation
 if "var_idx" not in st.session_state: st.session_state.var_idx = 0
-nav1,nav2,nav3 = st.columns([1,1,3])
+nav1, nav2, nav3 = st.columns([1, 1, 3])
 with nav1:
     if st.button("◀ Variante"):
         st.session_state.var_idx = (st.session_state.var_idx - 1) % len(variants)
@@ -265,7 +279,7 @@ html = f"""
   gap: 1px;
   background:#ddd; padding:4px; border:2px solid #333; width:fit-content;">
 """
-for (x,y,dx,dy,icon,typ,depth_cm,ori) in items:
+for (x,y,dx,dy,icon,typ,depth_cm) in items:
     html += f"""
     <div style="
       grid-column:{x+1}/span {dx};
@@ -281,16 +295,16 @@ st.components.v1.html(html, height=height, scrolling=False)
 wanted = {"Euro": int(n_euro), "Industrie": int(n_ind)}
 missing_msgs = []
 for typ in ["Euro","Industrie"]:
-    if wanted[typ] > 0 and placed.get(typ,0) < wanted[typ]:
-        missing = wanted[typ] - placed.get(typ,0)
+    if wanted[typ] > 0 and placed.get(typ, 0) < wanted[typ]:
+        missing = wanted[typ] - placed.get(typ, 0)
         missing_msgs.append(f"– {missing}× {typ} passt/passen nicht mehr")
 
 used_cm = used_length_cm_true(items)
-st.markdown(f"**Genutzte Länge (realistisch):** {used_cm} cm von {TRAILER_L} cm  (≈ {used_cm/TRAILER_L:.0%})")
+st.markdown(f"**Genutzte Länge (realistisch):** {used_cm} cm von {TRAILER_L} cm (≈ {used_cm/TRAILER_L:.0%})")
 
 if missing_msgs:
     st.error("🚫 **Platz reicht nicht:**\n" + "\n".join(missing_msgs))
 else:
     st.success("✅ **Alle angeforderten Paletten passen in den Laderaum.**")
 
-st.info("Tipp: Raster 25 cm & Zoom 4 px sind die empfohlenen Grundwerte. (Jetzt mit Ceil‑Rasterung & echten cm‑Längen.)")
+st.info("Empfehlung: Raster **40 cm** verwenden – dann sind 120/80 cm exakt darstellbar (3/2 Zellen).")
