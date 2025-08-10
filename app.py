@@ -1,27 +1,43 @@
 # pal_fuchs_9_side_by_side_html.py
-# Vier Varianten garantiert nebeneinander via HTML-Flex (mit horizontalem Scroll)
+# Vier Varianten garantiert nebeneinander (HTML-Flex) mit vereinbarten Unicode-Symbolen:
+# Euro längs = ▮, Euro quer (2) = ▬, Euro quer (1) = ▭, Industrie = ⬜
+# Blockbreite = 1 (kein "4er-Pack" mehr pro Rasterblock)
 
 import streamlit as st
 import html
 from typing import List, Dict, Tuple
 
-st.set_page_config(page_title="Paletten Fuchs – Side-by-Side (HTML Flex)", layout="wide")
+st.set_page_config(page_title="Paletten Fuchs – Side-by-Side (Unicode clean)", layout="wide")
 
+# Optional kompaktere Schrift für bessere Übersicht
+st.markdown("""
+<style>
+.block-container {max-width: 1600px; padding-top: 0.4rem;}
+pre, code {font-size: 10px; line-height: 1.05;}
+</style>
+""", unsafe_allow_html=True)
+
+# --- Geometrie / Raster ---
 TRAILER_LEN_CM = 1360
 EURO_L_CM, EURO_W_CM = 120, 80
-LENGTH_RASTER = 25
-CHARS_PER_BLOCK = 4
-CM_PER_RASTER = TRAILER_LEN_CM / LENGTH_RASTER  # ≈54.4
+LENGTH_RASTER = 25          # 25 Längs-Raster über 13,60 m
+CHARS_PER_BLOCK = 1         # <-- WICHTIG: nur 1 Zeichen pro Rasterblock (kein 4er-Pack!)
+CM_PER_RASTER = TRAILER_LEN_CM / LENGTH_RASTER  # ≈ 54.4 cm pro Raster
 
-SYM_EURO_LONG   = "▮"  # 3 Euro längs (120 cm)
-SYM_EURO_TRANS2 = "▬"  # 2 Euro quer  (80 cm)
-SYM_EURO_TRANS1 = "▭"  # 1 Euro quer  (80 cm)
+# --- Unicode-Symbole (vereinbart) ---
+SYM_EURO_LONG   = "▮"   # 3 Euro längs (120 cm)
+SYM_EURO_TRANS2 = "▬"   # 2 Euro quer  (80 cm)
+SYM_EURO_TRANS1 = "▭"   # 1 Euro quer  (80 cm, Einzel)
+SYM_INDUSTRY    = "⬜"   # Industrie (nur Platzhalter hier)
 
+# --- Hilfsfunktionen ---
 def blocks(n: int, symbol: str) -> str:
-    return (symbol * CHARS_PER_BLOCK) * n
+    # genau n Zeichen, jedes ein Symbol
+    return symbol * (n * CHARS_PER_BLOCK)
 
 def cm_to_raster(cm: int) -> int:
-    if abs(cm - 80) < 1e-6:  return 1
+    # Stabil: 80 cm -> 1 Block, 120 cm -> 2 Blöcke
+    if abs(cm - 80)  < 1e-6: return 1
     if abs(cm - 120) < 1e-6: return 2
     return max(1, round(cm / CM_PER_RASTER))
 
@@ -36,14 +52,15 @@ def euro_row_trans1() -> Dict:
 
 def render_rows(rows: List[Dict], length_limit_cm: int = TRAILER_LEN_CM) -> Tuple[str, int]:
     out, used_cm = [], 0
+    line_width_blocks = LENGTH_RASTER
     for r in rows:
         if used_cm + r['len_cm'] > length_limit_cm:
             break
-        fill_raster = cm_to_raster(r['len_cm'])
-        line = blocks(fill_raster, r['sym'])
-        pad_raster = LENGTH_RASTER - fill_raster
-        if pad_raster > 0:
-            line += " " * (pad_raster * CHARS_PER_BLOCK)
+        fill_blocks = cm_to_raster(r['len_cm'])
+        line = blocks(fill_blocks, r['sym'])
+        pad_blocks = line_width_blocks - fill_blocks
+        if pad_blocks > 0:
+            line += " " * (pad_blocks * CHARS_PER_BLOCK)
         out.append(line)
         used_cm += r['len_cm']
     return "\n".join(out), used_cm
@@ -56,11 +73,11 @@ def layout_for_preset_euro(n: int, singles_front: int = 0) -> List[Dict]:
     for _ in range(min(singles_front, remaining)):
         rows.append(euro_row_trans1()); remaining -= 1
 
-    # 2) 2-quer, wenn es die Restmenge auf Vielfaches von 3 bringt
+    # 2) 2-quer, wenn Rest dadurch durch 3 teilbar wird
     if remaining >= 2 and (remaining - 2) % 3 == 0:
         rows.append(euro_row_trans2()); remaining -= 2
 
-    # 3) Falls Rest nicht durch 3 teilbar, Singles wieder entfernen bis teilbar
+    # 3) falls Rest nicht durch 3 teilbar, Singles entfernen bis teilbar
     while remaining % 3 != 0 and any(r['type']=="EURO_1_TRANS" for r in rows):
         for i, r in enumerate(rows):
             if r['type']=="EURO_1_TRANS":
@@ -70,7 +87,7 @@ def layout_for_preset_euro(n: int, singles_front: int = 0) -> List[Dict]:
     if remaining < 0: remaining = 0
     rows += [euro_row_long() for _ in range(remaining // 3)]
 
-    # 5) Fallback, falls Zählung nicht exakt passt
+    # 5) Fallback, falls Anzahl nicht exakt passt
     if sum(r['pallets'] for r in rows) != n:
         if n >= 2 and (n - 2) % 3 == 0:
             rows = [euro_row_trans2()] + [euro_row_long() for _ in range((n-2)//3)]
@@ -88,7 +105,7 @@ def cap_to_trailer(rows: List[Dict]) -> List[Dict]:
         out.append(r); s += r['len_cm']
     return out
 
-# --- Varianten ---
+# --- Varianten berechnen ---
 rows_33 = cap_to_trailer(layout_for_preset_euro(33, singles_front=0))
 rows_32 = cap_to_trailer(layout_for_preset_euro(32, singles_front=2))
 rows_31 = cap_to_trailer(layout_for_preset_euro(31, singles_front=1))
@@ -99,13 +116,13 @@ txt_32, used_32 = render_rows(rows_32)
 txt_31, used_31 = render_rows(rows_31)
 txt_24, used_24 = render_rows(rows_24)
 
-# --- HARTE Side-by-Side-Ausgabe via HTML Flexbox ---
-st.title("🦊 Paletten Fuchs – Vier Varianten (HTML Flex)")
+# --- Garantiert nebeneinander via HTML Flexbox ---
+st.title("🦊 Paletten Fuchs – Vier Varianten (Unicode clean)")
 
 def card(title: str, body: str, used: int) -> str:
-    body = html.escape(body)  # sicher in <pre>
+    body = html.escape(body)
     return f"""
-    <div style="flex:0 0 auto; border:1px solid #ddd; padding:8px; border-radius:6px;">
+    <div style="flex:0 0 auto; border:1px solid #ddd; padding:8px; border-radius:6px; background:#fff;">
       <div style="font: 600 12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin-bottom:6px;">
         {html.escape(title)} &nbsp;•&nbsp; {used} cm / {TRAILER_LEN_CM} cm
       </div>
@@ -125,4 +142,4 @@ html_block = f"""
 """
 
 st.markdown(html_block, unsafe_allow_html=True)
-st.caption("Garantiert nebeneinander: Flexbox mit horizontalem Scroll. Monospace-Darstellung bleibt fix (25 Raster × 4 Zeichen).")
+st.caption("Zeichensatz: ▮ (längs), ▬ (quer, 2er-Reihe), ▭ (Einzel quer), ⬜ (Industrie, später). Blockbreite = 1, Raster = 25.")
