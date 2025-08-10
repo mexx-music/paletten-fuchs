@@ -626,11 +626,11 @@ if SHOW_TABS:
     compare_tabs_four_variants()
 # ===================== /TABS =====================
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Var 1", "Var 2", "Var 3", "Var 4"])
-    with tab1: tab_ui("Var 1", (33,0,0))
-    with tab2: tab_ui("Var 2", (32,2,0))
-    with tab3: tab_ui("Var 3", (31,1,0))
-    with tab4: tab_ui("Var 4", (24,0,0))
+    tab1, tab2, tab3, tab4 = st.tabs(["Var 1","Var 2","Var 3","Var 4"])
+    tab_ui(tab1, "Var 1", (33,0,0))
+    tab_ui(tab2, "Var 2", (32,2,0))
+    tab_ui(tab3, "Var 3", (31,1,0))
+    tab_ui(tab4, "Var 4", (24,0,0))
 
 if SHOW_TABS:
     compare_tabs_four_variants()
