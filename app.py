@@ -152,36 +152,22 @@ st.title("🦊 Paletten Fuchs – Drag & Drop (Kühler 1360×245 cm)")
 with st.sidebar:
     st.subheader("📦 Paletten anlegen")
 
-    # --> WICHTIG: alle Parameter benannt + format und eindeutige keys
     n_euro = st.number_input(
         label="Euro (120×80)",
-        min_value=0,
-        max_value=45,
-        value=12,
-        step=1,
-        format="%d",
+        min_value=0, max_value=45, value=12, step=1, format="%d",
         key="n_euro_input",
     )
     n_ind = st.number_input(
         label="Industrie (100×120 quer)",
-        min_value=0,
-        max_value=30,
-        value=4,
-        step=1,
-        format="%d",
+        min_value=0, max_value=30, value=4, step=1, format="%d",
         key="n_ind_input",
     )
     n_ibc = st.number_input(
         label="IBC (schwer)",
-        min_value=0,
-        max_value=30,
-        value=0,
-        step=1,
-        format="%d",
+        min_value=0, max_value=30, value=0, step=1, format="%d",
         key="n_ibc_input",
     )
 
-    # Erst NACH den Inputs initialisieren – und mit einem eigenen Key
     if "init_json" not in st.session_state:
         st.session_state.init_json = spawn_initial_objects(int(n_euro), int(n_ind), int(n_ibc))
 
