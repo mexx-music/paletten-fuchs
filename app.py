@@ -1,488 +1,308 @@
-# pal_fuchs_app_clean.py
-# 🦊 Pal Fuchs – Varianten & Gewichtsmodus (bereinigt, Keys ergänzt, farbliche Orientierung)
-from __future__ import annotations
-import math
-from dataclasses import dataclass
-from typing import List, Tuple, Dict
+# pal_fuchs_9_clean.py
+# Paletten Fuchs – Clean Basis (P0+P1)
+# - Unicode/Monospace-Rendering (nur Text, kein HTML)
+# - Feste Rasterung: 25 Längsblöcke, 4 Zeichen je Block
+# - Presets: 24–33 Euro inkl. 31/32 (Einzel-quer vorne)
+# - Sauberer Abschluss: letzte Reihe ist immer eine volle Reihe (3 längs oder 2 quer oder 1 quer-Einzel)
+# - Clean-UI: Zusatzoptionen standardmäßig ausgeblendet (Blumenwagen, Feinjustage)
+# - Preset-"Popup": via st.popover() (fallback auf st.expander)
+
 import streamlit as st
+import math
+from typing import List, Tuple, Dict
 
-# ---------- Basis ----------
-TRAILER_L = 1360  # cm
-TRAILER_W = 245   # cm
+# -----------------------------
+# Konstanten & Grundeinstellungen
+# -----------------------------
 
-st.set_page_config(page_title="🦊 Pal Fuchs – Varianten & Achslast", layout="wide")
-st.title("🦊 Pal Fuchs – Varianten & Gewichtsmodus")
+st.set_page_config(page_title="Paletten Fuchs – Clean Basis", layout="wide")
 
-# ---------- Sidebar: Anzeige & Fahrzeug ----------
-with st.sidebar:
-    st.markdown("### ⚙️ Anzeige")
-    cell_cm = st.slider("Raster (cm/Zelle)", 20, 50, 40, 5, key="cfg_cell_cm")
-    auto_zoom = st.checkbox("Auto‑Zoom auf konstante Breite", False, key="cfg_auto_zoom")
-    cell_px = st.slider("Zell‑Pixel", 4, 20, 6, 1, disabled=auto_zoom, key="cfg_cell_px")
-    st.markdown("---")
-    st.markdown("### 🚛 Kühlsattel / Puffer")
-    use_buffers = st.checkbox("Puffer aktivieren (dicke Türen / Aggregat)", False, key="cfg_buffers")
-    front_buf = st.number_input("Front‑Puffer (cm)", 0, 120, 0, 5, disabled=not use_buffers, key="cfg_front_buf")
-    rear_buf = st.number_input("Heck‑Puffer (cm)", 0, 120, 0, 5, disabled=not use_buffers, key="cfg_rear_buf")
-    st.caption("Hinweis: Front‑Puffer ist praktisch nur relevant, wenn Paletten hoch genug fürs Aggregat sind.")
+TRAILER_LEN_CM = 1360         # Kühlsattel Standard
+TRAILER_WIDTH_CM = 240
+EURO_L_CM, EURO_W_CM = 120, 80
+IND_L_CM,  IND_W_CM  = 120, 100
 
-# Effektive Länge & Grid
-L_EFF = max(0, TRAILER_L - (front_buf if use_buffers else 0) - (rear_buf if use_buffers else 0))
-X = max(1, math.floor(TRAILER_L / cell_cm))  # volle Trailerlänge, für optische Puffer
-Y = max(1, math.ceil(TRAILER_W / cell_cm))
+LENGTH_RASTER = 25            # 25 Rasterspalten über 13,60 m
+CHARS_PER_BLOCK = 4           # 4 Zeichen je Rasterblock
+CM_PER_RASTER = TRAILER_LEN_CM / LENGTH_RASTER  # ≈54.4 cm
 
-# Auto‑Zoom (optional)
-if auto_zoom:
-    cell_px = max(4, min(20, round(820 / X)))
+# Unicode-Symbole (monospace-tauglich)
+SYM_EURO_LONG   = "▮"  # 3 längs in der Breite (Reihenlänge 120 cm)
+SYM_EURO_TRANS2 = "▬"  # 2 quer in der Breite (Reihenlänge 80 cm)
+SYM_EURO_TRANS1 = "▭"  # 1 quer (Einzel mittig/verschiebbar) (Reihenlänge 80 cm)
+SYM_INDUSTRY    = "■"  # Industrie-Reihe (optional, später)
 
-x_offset_cells = math.ceil((front_buf if use_buffers else 0) / cell_cm)  # optischer Offset links
+# -----------------------------
+# Hilfsfunktionen
+# -----------------------------
 
-# ---------- Datenmodelle ----------
-@dataclass
-class PalType:
-    name: str
-    depth_l: int     # cm, entlang Länge (längs)
-    width_l: int     # cm, quer (längs)
-    depth_q: int     # cm, entlang Länge (quer)
-    width_q: int     # cm, quer (quer)
-    default_weight: int  # kg
+def blocks(n: int, symbol: str) -> str:
+    """Erzeuge n Rasterblöcke mit je CHARS_PER_BLOCK Symbolen."""
+    return (symbol * CHARS_PER_BLOCK) * n
 
-EURO = PalType("Euro", depth_l=120, width_l=80, depth_q=80, width_q=120, default_weight=250)
-IND  = PalType("Industrie/IBC", depth_l=120, width_l=100, depth_q=100, width_q=120, default_weight=1100)
+def cm_to_raster(cm: int) -> int:
+    """Konvertiert cm (Reihenlänge) in Rasterspalten (visuelle Darstellung)."""
+    # Stabil: 80 cm -> 1 Raster, 120 cm -> 2 Raster
+    # Allgemein über rundung:
+    return max(1, round(cm / CM_PER_RASTER))
 
-# ---------- Board / Platzierung ----------
-def span_to_cells(depth_cm: int, width_cm: int) -> Tuple[int, int]:
-    dx = max(1, math.ceil(depth_cm / cell_cm))  # entlang Länge
-    dy = max(1, math.ceil(width_cm / cell_cm))  # quer
-    return dx, dy
-
-def center_y(dy: int) -> int:
-    return max(0, (Y - dy) // 2)
-
-def empty_board():
-    occ = [[False] * X for _ in range(Y)]
-    # items: (x, y, dx, dy, typ, depth_cm, weight_kg)
-    items: List[Tuple[int, int, int, int, str, int, int]] = []
-    placed: Dict[str, int] = {"Euro": 0, "Industrie/IBC": 0}
-    return occ, items, placed
-
-def free(occ, x: int, y: int, dx: int, dy: int) -> bool:
-    if x < 0 or y < 0 or x + dx > X or y + dy > Y:
-        return False
-    for yy in range(y, y + dy):
-        for xx in range(x, x + dx):
-            if occ[yy][xx]:
-                return False
-    return True
-
-def place(occ, items, placed, x: int, y: int, dx: int, dy: int,
-          typ_name: str, depth_cm: int, weight_kg: int) -> None:
-    for yy in range(y, y + dy):
-        for xx in range(x, x + dx):
-            occ[yy][xx] = True
-    items.append((x, y, dx, dy, typ_name, depth_cm, weight_kg))
-    placed[typ_name] = placed.get(typ_name, 0) + 1
-
-def used_length_cm_real(items) -> int:
-    if not items:
-        return 0
-    rightmost = 0
-    for (x, _y, _dx, _dy, _typ, depth_cm, _w) in items:
-        rightmost = max(rightmost, x * cell_cm + depth_cm)
-    return min((front_buf if use_buffers else 0) + rightmost, TRAILER_L)
-
-# ---------- Hilfs‑Platzierer ----------
-def place_euro_col_l(occ, items, placed, x: int, want: int, weight: int = EURO.default_weight) -> Tuple[int, int]:
-    dx, dy = span_to_cells(EURO.depth_l, EURO.width_l)
-    placed_now = 0
-    for y in (0, center_y(dy), Y - dy):
-        if placed_now >= want:
-            break
-        if free(occ, x, y, dx, dy):
-            place(occ, items, placed, x, y, dx, dy, "Euro", EURO.depth_l, weight)
-            placed_now += 1
-    return placed_now, x + dx
-
-def place_euro_row_q(occ, items, placed, x: int, want: int, weight: int = EURO.default_weight) -> Tuple[int, int]:
-    dx, dy = span_to_cells(EURO.depth_q, EURO.width_q)
-    placed_now = 0
-    for y in (0, Y - dy):
-        if placed_now >= want:
-            break
-        if free(occ, x, y, dx, dy):
-            place(occ, items, placed, x, y, dx, dy, "Euro", EURO.depth_q, weight)
-            placed_now += 1
-    return placed_now, x + dx
-
-def place_ind_row_q(occ, items, placed, x: int, want: int, heavy: bool) -> Tuple[int, int]:
-    dx, dy = span_to_cells(IND.depth_q, IND.width_q)
-    w = IND.default_weight if heavy else max(600, IND.default_weight // 2)
-    placed_now = 0
-    for y in (0, Y - dy):
-        if placed_now >= want:
-            break
-        if free(occ, x, y, dx, dy):
-            place(occ, items, placed, x, y, dx, dy, "Industrie/IBC", IND.depth_q, w)
-            placed_now += 1
-    return placed_now, x + dx
-
-def place_ind_mid_then_edges(occ, items, placed, x: int, count: int, heavy: bool) -> int:
-    dx, dy = span_to_cells(IND.depth_q, IND.width_q)
-    w = IND.default_weight if heavy else max(600, IND.default_weight // 2)
-    x_start = x + (1 if heavy and (x + 1 + dx <= X) else 0)
-    # ungerade → 1 mittig
-    if count % 2 == 1 and free(occ, x_start, center_y(dy), dx, dy):
-        place(occ, items, placed, x_start, center_y(dy), dx, dy, "Industrie/IBC", IND.depth_q, w)
-        count -= 1
-        x_start += dx
-    while count > 0 and x_start + dx <= X:
-        for y in (0, Y - dy):
-            if count <= 0:
-                break
-            if free(occ, x_start, y, dx, dy):
-                place(occ, items, placed, x_start, y, dx, dy, "Industrie/IBC", IND.depth_q, w)
-                count -= 1
-        x_start += dx
-    return x_start
-
-# ---------- Reale Varianten‑Logik (Euro) ----------
-def euro_variant_q_then_l(occ, items, placed, x_start: int, n: int) -> None:
-    max_q = L_EFF // EURO.depth_q
-    best = None
-    for q_rows in range(min(n // 2, max_q), -1, -1):
-        used_q = 2 * q_rows
-        rem = n - used_q
-        len_left = L_EFF - q_rows * EURO.depth_q
-        need_l = math.ceil(rem / 3) if rem > 0 else 0
-        if need_l * EURO.depth_l <= len_left:
-            best = (q_rows, need_l)
-            break
-    if best is None:
-        best = (0, math.ceil(n / 3))
-    q_rows, l_cols = best
-    x = x_start
-    done = 0
-    for _ in range(q_rows):
-        want = min(2, n - done)
-        got, x = place_euro_row_q(occ, items, placed, x, want)
-        done += got
-    for _ in range(l_cols):
-        if done >= n:
-            break
-        want = min(3, n - done)
-        got, nx = place_euro_col_l(occ, items, placed, x, want)
-        done += got
-        x = nx
-    if done < n:
-        want = min(2, n - done)
-        place_euro_row_q(occ, items, placed, x, want)
-
-def euro_variant_l_then_q(occ, items, placed, x_start: int, n: int) -> None:
-    max_l = L_EFF // EURO.depth_l
-    best = None
-    for l_cols in range(min(math.ceil(n / 3), max_l), -1, -1):
-        used_l = 3 * l_cols
-        rem = n - used_l
-        len_left = L_EFF - l_cols * EURO.depth_l
-        need_q = math.ceil(rem / 2) if rem > 0 else 0
-        if need_q * EURO.depth_q <= len_left:
-            best = (l_cols, need_q)
-            break
-    if best is None:
-        best = (0, math.ceil(n / 2))
-    l_cols, q_rows = best
-    x = x_start
-    done = 0
-    for _ in range(l_cols):
-        want = min(3, n - done)
-        got, nx = place_euro_col_l(occ, items, placed, x, want)
-        done += got
-        x = nx
-        if done >= n:
-            break
-    for _ in range(q_rows):
-        if done >= n:
-            break
-        want = min(2, n - done)
-        got, x = place_euro_row_q(occ, items, placed, x, want)
-        done += got
-
-def euro_variant_all_l(occ, items, placed, x_start: int, n: int) -> None:
-    x = x_start
-    left = n
-    while left > 0 and (x - x_start) * cell_cm < L_EFF + 1:
-        want = min(3, left)
-        got, nx = place_euro_col_l(occ, items, placed, x, want)
-        if got == 0:
-            break
-        left -= got
-        x = nx
-
-def euro_variant_all_q_with_tail(occ, items, placed, x_start: int, n: int) -> None:
-    x = x_start
-    left = n
-    full_q = min(L_EFF // EURO.depth_q, math.ceil(n / 2))
-    for _ in range(full_q):
-        if left <= 0:
-            break
-        want = min(2, left)
-        got, x = place_euro_row_q(occ, items, placed, x, want)
-        left -= got
-    while left > 0:
-        want = min(3, left)
-        got, nx = place_euro_col_l(occ, items, placed, x, want)
-        if got == 0:
-            break
-        left -= got
-        x = nx
-
-# ---------- Gewichts‑Muster ----------
-def weight_pattern_A(occ, items, placed, x_start: int, n_euro: int) -> None:
-    done = 0
-    x = x_start
-    dx, dy = span_to_cells(EURO.depth_q, EURO.width_q)
-    if n_euro > 0 and free(occ, x, center_y(dy), dx, dy):
-        place(occ, items, placed, x, center_y(dy), dx, dy, "Euro", EURO.depth_q, EURO.default_weight); done += 1
-        x += dx
-    while done + 2 <= n_euro and (x - x_start) * cell_cm + EURO.depth_q <= L_EFF:
-        got, x = place_euro_row_q(occ, items, placed, x, want=2)
-        if got == 0:
-            break
-        done += got
-    while done < n_euro and (x - x_start) * cell_cm + EURO.depth_l <= L_EFF:
-        want = min(3, n_euro - done)
-        got, nx = place_euro_col_l(occ, items, placed, x, want)
-        if got == 0:
-            break
-        done += got
-        x = nx
-    if done < n_euro:
-        want = min(2, n_euro - done)
-        place_euro_row_q(occ, items, placed, x, want)
-
-def weight_pattern_B(occ, items, placed, x_start: int, n_euro: int) -> None:
-    done = 0
-    x = x_start
-    dx, dy = span_to_cells(EURO.depth_q, EURO.width_q)
-    for _ in range(2):
-        if done < n_euro and free(occ, x, center_y(dy), dx, dy):
-            place(occ, items, placed, x, center_y(dy), dx, dy, "Euro", EURO.depth_q, EURO.default_weight); done += 1
-            x += dx
-    while done + 2 <= n_euro and (x - x_start) * cell_cm + EURO.depth_q <= L_EFF:
-        got, x = place_euro_row_q(occ, items, placed, x, want=2)
-        if got == 0:
-            break
-        done += got
-    while done < n_euro and (x - x_start) * cell_cm + EURO.depth_l <= L_EFF:
-        want = min(3, n_euro - done)
-        got, nx = place_euro_col_l(occ, items, placed, x, want)
-        if got == 0:
-            break
-        done += got
-        x = nx
-
-def weight_pattern_C(occ, items, placed, x_start: int, n_euro: int) -> None:
-    done = 0
-    x = x_start
-    dx, dy = span_to_cells(EURO.depth_q, EURO.width_q)
-    if n_euro > 0 and free(occ, x, center_y(dy), dx, dy):
-        place(occ, items, placed, x, center_y(dy), dx, dy, "Euro", EURO.depth_q, EURO.default_weight); done += 1
-        x += dx
-    while done < n_euro and (x - x_start) * cell_cm + EURO.depth_l <= L_EFF:
-        want = min(3, n_euro - done)
-        got, nx = place_euro_col_l(occ, items, placed, x, want)
-        if got == 0:
-            break
-        done += got
-        x = nx
-    while done < n_euro and (x - x_start) * cell_cm + EURO.depth_q <= L_EFF:
-        want = min(2, n_euro - done)
-        got, x = place_euro_row_q(occ, items, placed, x, want)
-        if got == 0:
-            break
-        done += got
-
-def generate_weight_variants(n_euro: int, n_ind_light: int, n_ind_heavy: int):
-    variants = []
-    for pattern in (weight_pattern_A, weight_pattern_B, weight_pattern_C):
-        occ, items, placed = empty_board()
-        x = x_offset_cells
-        if n_ind_light > 0:
-            x = place_ind_mid_then_edges(occ, items, placed, x, n_ind_light, heavy=False)
-        pattern(occ, items, placed, x, n_euro)
-        if n_ind_heavy > 0:
-            x_heavy = max(x, x + 1)
-            place_ind_mid_then_edges(occ, items, placed, x_heavy, n_ind_heavy, heavy=True)
-        variants.append((items, placed))
-    return variants
-
-# ---------- Standard‑Varianten ----------
-def generate_standard_variants(n_euro: int, n_ind_light: int, n_ind_heavy: int):
-    variants = []
-    # 1) Quer‑lastig
-    occ, items, placed = empty_board()
-    x = x_offset_cells
-    if n_ind_light > 0:
-        x = place_ind_mid_then_edges(occ, items, placed, x, n_ind_light, heavy=False)
-    euro_variant_q_then_l(occ, items, placed, x, n_euro)
-    if n_ind_heavy > 0:
-        place_ind_mid_then_edges(occ, items, placed, max(x, x + 1), n_ind_heavy, heavy=True)
-    variants.append((items, placed))
-
-    # 2) Längs‑lastig
-    occ, items, placed = empty_board()
-    x = x_offset_cells
-    if n_ind_light > 0:
-        x = place_ind_mid_then_edges(occ, items, placed, x, n_ind_light, heavy=False)
-    euro_variant_l_then_q(occ, items, placed, x, n_euro)
-    if n_ind_heavy > 0:
-        place_ind_mid_then_edges(occ, items, placed, max(x, x + 1), n_ind_heavy, heavy=True)
-    variants.append((items, placed))
-
-    # 3) Nur längs
-    occ, items, placed = empty_board()
-    x = x_offset_cells
-    if n_ind_light > 0:
-        x = place_ind_mid_then_edges(occ, items, placed, x, n_ind_light, heavy=False)
-    euro_variant_all_l(occ, items, placed, x, n_euro)
-    if n_ind_heavy > 0:
-        place_ind_mid_then_edges(occ, items, placed, max(x, x + 1), n_ind_heavy, heavy=True)
-    variants.append((items, placed))
-
-    # 4) Nur quer (+ Tail)
-    occ, items, placed = empty_board()
-    x = x_offset_cells
-    if n_ind_light > 0:
-        x = place_ind_mid_then_edges(occ, items, placed, x, n_ind_light, heavy=False)
-    euro_variant_all_q_with_tail(occ, items, placed, x, n_euro)
-    if n_ind_heavy > 0:
-        place_ind_mid_then_edges(occ, items, placed, max(x, x + 1), n_ind_heavy, heavy=True)
-    variants.append((items, placed))
-
-    return variants
-
-# ---------- Achslast‑Schätzung ----------
-def axle_balance(items) -> Tuple[int, int]:
-    if not items:
-        return 0, 0
-    front_origin_cm = (front_buf if use_buffers else 0)
-    total_w = 0.0
-    front_moment = 0.0
-    for (x, _y, _dx, _dy, _typ, depth_cm, w) in items:
-        x_cm_start = front_origin_cm + x * cell_cm
-        x_cm_center = x_cm_start + depth_cm / 2
-        total_w += w
-        eff = L_EFF if L_EFF > 0 else TRAILER_L
-        pos_factor = max(0.0, 1.0 - (x_cm_center - front_origin_cm) / max(1.0, eff))
-        front_moment += w * pos_factor
-    if total_w <= 0:
-        return 0, 0
-    front_pct = int(round(100 * front_moment / total_w))
-    rear_pct = 100 - front_pct
-    return front_pct, rear_pct
-
-# ---------- UI: Tabs ----------
-tab1, tab2 = st.tabs(["🔄 Standard‑Varianten", "⚖️ Gewichtsmodus"])
-
-def render_board(items):
-    html = f"""
-    <div style='display:grid;
-      grid-template-columns: repeat({X}, {cell_px}px);
-      grid-auto-rows: {cell_px}px;
-      gap: 1px;
-      background:#ddd; padding:6px; border:2px solid #333; width:fit-content;'>
+def render_rows(rows: List[Dict], length_limit_cm: int = TRAILER_LEN_CM) -> Tuple[str, int]:
     """
-    if x_offset_cells > 0:
-        html += f"<div style='grid-column:1/span {x_offset_cells}; grid-row:1/span {Y}; background:#f3f3f3;'></div>"
-    for (x, y, dx, dy, typ, depth, _w) in items:
-        # Farbcode: Euro längs (depth=120) hellblau, Euro quer (depth=80) hellgrün,
-        # Industrie/IBC (depth=100) hellorange
-        if typ == "Euro":
-            bg = "#e3f2fd" if depth == 120 else "#e8f5e9"
-        else:
-            bg = "#ffe0b2"
-        html += f"<div style='grid-column:{x+1}/span {dx}; grid-row:{y+1}/span {dy}; background:{bg}; border:1px solid #777;'></div>"
-    html += "</div>"
-    height_px = min(680, max(240, (cell_px + 1) * Y + 28))
-    st.components.v1.html(html, height=height_px, scrolling=False)
+    Rendert Zeile-für-Zeile als Textblock. Jede Zeile repräsentiert eine Reihenlänge entlang des Trailers.
+    rows: Liste von Dikten mit Keys: 'type', 'len_cm', 'pallets', 'sym', optional 'label'
+    Return: (text_render, used_len_cm)
+    """
+    output_lines = []
+    used_cm = 0
+    for i, r in enumerate(rows, start=1):
+        if used_cm + r['len_cm'] > length_limit_cm:
+            break
+        fill_raster = cm_to_raster(r['len_cm'])
+        line = blocks(fill_raster, r['sym'])
+        # Rest bis volle Trailerlänge (optisch, optional)
+        pad_raster = LENGTH_RASTER - fill_raster
+        if pad_raster > 0:
+            line += " " * (pad_raster * CHARS_PER_BLOCK)
 
-with tab1:
-    st.markdown("### Eingaben")
-    c1, c2, c3, c4 = st.columns(4)
+        label = r.get('label', "")
+        if label:
+            # Rechts einen knappen Label-Anhang (nicht monospaced-kritisch)
+            line += f"   | {label}"
+
+        output_lines.append(line)
+        used_cm += r['len_cm']
+
+    return "\n".join(output_lines), used_cm
+
+def euro_row_long() -> Dict:
+    return {"type": "EURO_3_LONG", "len_cm": EURO_L_CM, "pallets": 3, "sym": SYM_EURO_LONG}
+
+def euro_row_trans2() -> Dict:
+    return {"type": "EURO_2_TRANS", "len_cm": EURO_W_CM, "pallets": 2, "sym": SYM_EURO_TRANS2}
+
+def euro_row_trans1(pos_label: str = "Mitte") -> Dict:
+    # Einzel-quer vorne: 1 Palette, 80 cm Reihenlänge, verschiebbar (Label L/M/R)
+    return {"type": "EURO_1_TRANS", "len_cm": EURO_W_CM, "pallets": 1, "sym": SYM_EURO_TRANS1, "label": f"Einzel quer: {pos_label}"}
+
+# -----------------------------
+# Layout-Generatoren (Euro)
+# -----------------------------
+
+def layout_for_preset_euro(n: int, singles_front: int = 0) -> List[Dict]:
+    """
+    Erzeuge ein Euro-Layout für N Paletten.
+    - singles_front: Anzahl Einzel-quer vorne (0/1/2), jeweils 1 Palette und 80 cm Länge pro Reihe.
+    - Rest wird mit 3-längs-Reihen (120 cm, 3 Paletten) aufgefüllt.
+    - Falls Rest modulo 3 nicht 0 und singles_front < 2, wird versucht, mit einer 2-quer-Reihe (2 Paletten) zu ergänzen.
+    Ziel: exakte Stückzahl, Reihenfolge: erst (optional) 1/2 Einzel-quer vorne, dann ggf. 2-quer, danach 3-längs.
+    """
+    rows: List[Dict] = []
+    remaining = n
+
+    # 1) Einzel-quer vorne (0/1/2) – je 1 Palette
+    if singles_front > 0:
+        take = min(singles_front, remaining)
+        for _ in range(take):
+            rows.append(euro_row_trans1())  # Label-Update via UI
+        remaining -= take
+
+    # 2) Falls mit 2-quer eine schöne Teilbarkeit entsteht
+    #    Prüfe, ob wir mit genau EINE 2-quer-Reihe (2 Paletten) die restlichen Paletten auf ein Vielfaches von 3 bringen
+    used_two_trans = False
+    if remaining >= 2 and (remaining - 2) % 3 == 0:
+        rows.append(euro_row_trans2())
+        remaining -= 2
+        used_two_trans = True
+
+    # 3) Fülle den Rest mit 3-längs-Reihen
+    if remaining % 3 != 0:
+        # Wenn die Zahl nicht aufgeht, fallback: entferne ggf. die 2-quer wieder und setze alles auf 3-längs
+        if used_two_trans:
+            # roll back
+            rows.pop()
+            remaining += 2
+        # Wenn Singles gesetzt sind, aber es nicht aufgeht, reduzieren wir Singles vorzugweise
+        while remaining % 3 != 0 and any(r['type'] == "EURO_1_TRANS" for r in rows):
+            # entferne ein Single (von vorne)
+            # (In der Praxis: für 31 -> 1 Einzel + 10*3 passt, für 32 -> 2 Einzel + 10*3 passt)
+            # Wenn wir hier landen, dann war die Eingangskombi unvorteilhaft
+            for idx, r in enumerate(rows):
+                if r['type'] == "EURO_1_TRANS":
+                    rows.pop(idx)
+                    remaining += 1
+                    break
+
+    # Jetzt sollte remaining % 3 == 0 (ansonsten füllen wir ausschließlich mit 3-längs und überschreiten ggf. Ziel nicht exakt)
+    if remaining < 0:
+        remaining = 0
+    count_long_rows = remaining // 3
+    rows.extend(euro_row_long() for _ in range(count_long_rows))
+
+    # Falls wir NICHT exakt die gewünschte Anzahl erreicht haben (z. B. 24, 30, 33 gehen exakt; 31/32 durch Singles),
+    # prüfen wir Ergebnis und korrigieren konservativ:
+    if sum(r['pallets'] for r in rows) != n:
+        # Versuche zweite Variante: erst 2-quer, dann long (ohne Singles)
+        test_rows = []
+        if n >= 2 and (n - 2) % 3 == 0:
+            test_rows.append(euro_row_trans2())
+            rest = n - 2
+            test_rows.extend(euro_row_long() for _ in range(rest // 3))
+            rows = test_rows
+
+    return rows
+
+def apply_single_positions(rows: List[Dict], single_pos: int) -> None:
+    """
+    Aktualisiert die Label der Einzel-quer-Reihen (EURO_1_TRANS) nach Slider (0..4..8).
+    0/1 = links, 2 = mitte, 3/4 = rechts. (Wir zeigen nur Label an.)
+    """
+    label = "Mitte"
+    if single_pos <= 1:
+        label = "Links"
+    elif single_pos >= 3:
+        label = "Rechts"
+    # Setze Label für alle Singles
+    for r in rows:
+        if r['type'] == "EURO_1_TRANS":
+            r['label'] = f"Einzel quer: {label}"
+
+def total_used_length_cm(rows: List[Dict]) -> int:
+    return sum(r['len_cm'] for r in rows)
+
+def total_pallets(rows: List[Dict]) -> int:
+    return sum(r['pallets'] for r in rows)
+
+# -----------------------------
+# UI
+# -----------------------------
+
+st.title("🦊 Paletten Fuchs – Clean Basis")
+
+# Clean-UI / Erweiterte Optionen
+col_top1, col_top2, col_top3 = st.columns([1,1,2])
+with col_top1:
+    clean_mode = st.toggle("🧹 Clean-UI", value=True, help="Zusatzfunktionen ausblenden. Minimal starten.")
+
+with col_top2:
+    blumen_on = st.toggle("🌼 Blumenwagen anzeigen", value=False, help="Komplett verborgen, bis aktiv.")
+
+# Preset-"Popup" (Popover, fallback Expander)
+chosen_preset = None
+singles_front_default = 0
+with col_top3:
+    try:
+        with st.popover("📦 Preset wählen"):
+            st.write("Schnellauswahl – Euro-Paletten:")
+            preset = st.radio(
+                "Vorgaben",
+                options=["33 Euro", "32 Euro (2×Einzel quer vorne)", "31 Euro (1×Einzel quer vorne)",
+                         "30 Euro", "29 Euro", "28 Euro", "27 Euro", "26 Euro", "25 Euro", "24 Euro",
+                         "Benutzerdefiniert"],
+                index=0
+            )
+            chosen_preset = preset
+    except Exception:
+        with st.expander("📦 Preset wählen", expanded=True):
+            st.write("Schnellauswahl – Euro-Paletten:")
+            preset = st.radio(
+                "Vorgaben",
+                options=["33 Euro", "32 Euro (2×Einzel quer vorne)", "31 Euro (1×Einzel quer vorne)",
+                         "30 Euro", "29 Euro", "28 Euro", "27 Euro", "26 Euro", "25 Euro", "24 Euro",
+                         "Benutzerdefiniert"],
+                index=0
+            )
+            chosen_preset = preset
+
+# Benutzerdefiniertes Ziel / Feineinstellungen
+if chosen_preset == "Benutzerdefiniert":
+    target_n = st.number_input("Ziel: Anzahl Euro-Paletten", min_value=1, max_value=40, value=33, step=1)
+    singles_front = st.slider("Einzel-quer vorne (0/1/2)", 0, 2, 0)
+else:
+    mapping = {
+        "33 Euro": (33, 0),
+        "32 Euro (2×Einzel quer vorne)": (32, 2),
+        "31 Euro (1×Einzel quer vorne)": (31, 1),
+        "30 Euro": (30, 0),
+        "29 Euro": (29, 0),
+        "28 Euro": (28, 0),
+        "27 Euro": (27, 0),
+        "26 Euro": (26, 0),
+        "25 Euro": (25, 0),
+        "24 Euro": (24, 0),
+    }
+    target_n, singles_front = mapping.get(chosen_preset, (33, 0))
+
+# Erweiterte Optionen (ausgeblendet in Clean)
+if not clean_mode:
+    st.subheader("Erweiterte Optionen")
+    c1, c2, c3 = st.columns(3)
     with c1:
-        n_euro = st.number_input("Euro (120×80)", 0, 45, 33, key="std_n_euro")
+        single_pos = st.slider("Einzel-quer Position", 0, 4, 2, help="0/1=links, 2=mitte, 3/4=rechts")
     with c2:
-        n_ind_light = st.number_input("Industrie/IBC leicht", 0, 30, 0, key="std_ind_light")
+        fix_back_finish = st.checkbox("Abschluss hinten hart prüfen", value=True,
+                                      help="Falls über 13,60 m, letzte Reihen abschneiden.")
     with c3:
-        n_ind_heavy = st.number_input("Industrie/IBC schwer (z. B. IBC)", 0, 30, 0, key="std_ind_heavy")
-    with c4:
-        _ = st.markdown("&nbsp;")
+        show_length_bar = st.checkbox("Längenbalken anzeigen", value=True)
+else:
+    single_pos = 2
+    fix_back_finish = True
+    show_length_bar = True
 
-    variants = generate_standard_variants(int(n_euro), int(n_ind_light), int(n_ind_heavy))
+# Blumenwagen (nur UI-Placeholder, komplett aus, bis aktiv)
+if blumen_on and not clean_mode:
+    st.info("🌼 Blumenwagen-Logik ist (bewusst) abgeschaltet in dieser Clean-Basis. Nur Anzeige-Toggle implementiert.")
 
-    if "std_idx" not in st.session_state:
-        st.session_state.std_idx = 0
-    nvar = len(variants)
-    ncol1, ncol2, ncol3 = st.columns([1, 1, 3])
-    with ncol1:
-        if st.button("◀ Variante", key="std_prev"):
-            st.session_state.std_idx = (st.session_state.std_idx - 1) % nvar
-    with ncol2:
-        if st.button("Variante ▶", key="std_next"):
-            st.session_state.std_idx = (st.session_state.std_idx + 1) % nvar
-    with ncol3:
-        st.markdown(f"**Variante:** {st.session_state.std_idx + 1} / {nvar}")
+# -----------------------------
+# Layout erzeugen (Euro)
+# -----------------------------
 
-    items, placed = variants[st.session_state.std_idx]
-    render_board(items)
+rows = layout_for_preset_euro(target_n, singles_front=singles_front)
+apply_single_positions(rows, single_pos=single_pos)
 
-    used_cm = used_length_cm_real(items)
-    share = used_cm / TRAILER_L if TRAILER_L else 0.0
-    st.markdown(f"**Genutzte Länge (realistisch):** {used_cm} cm von {TRAILER_L} cm (≈ {share:.0%})")
-    f_pct, r_pct = axle_balance(items)
-    st.markdown(f"**Achslast‑Schätzung:** vorne {f_pct}% / hinten {r_pct}%")
+# Harter Abschluss: Wenn Summenlänge > Trailer, schneide Überschuss (praktisch selten mit den vorgefertigten Presets)
+used_cm = total_used_length_cm(rows)
+if fix_back_finish and used_cm > TRAILER_LEN_CM:
+    # Schneide letzte(n) Reihen ab, bis es passt (Vorrang: Abschluss darf Trailer nicht überragen)
+    while rows and total_used_length_cm(rows) > TRAILER_LEN_CM:
+        rows.pop()
+    used_cm = total_used_length_cm(rows)
 
-with tab2:
-    st.markdown("### Eingaben (Gewichtsmodus)")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        n_euro_w = st.number_input("Euro (120×80)", 0, 45, 21, key="w_n_euro")
-    with c2:
-        n_ind_light_w = st.number_input("Industrie/IBC leicht", 0, 30, 0, key="w_ind_light")
-    with c3:
-        n_ind_heavy_w = st.number_input("Industrie/IBC schwer (z. B. IBC)", 0, 30, 0, key="w_ind_heavy")
-    with c4:
-        _ = st.markdown("&nbsp;")
+# -----------------------------
+# Ausgabe
+# -----------------------------
 
-    weight_variants = generate_weight_variants(int(n_euro_w), int(n_ind_light_w), int(n_ind_heavy_w))
+left, right = st.columns([2, 1])
 
-    if "w_idx" not in st.session_state:
-        st.session_state.w_idx = 0
-    nvar_w = len(weight_variants)
-    ncol1, ncol2, ncol3 = st.columns([1, 1, 3])
-    with ncol1:
-        if st.button("◀ Variante", key="w_prev"):
-            st.session_state.w_idx = (st.session_state.w_idx - 1) % nvar_w
-    with ncol2:
-        if st.button("Variante ▶", key="w_next"):
-            st.session_state.w_idx = (st.session_state.w_idx + 1) % nvar_w
-    with ncol3:
-        st.markdown(f"**Gewichts‑Variante:** {st.session_state.w_idx + 1} / {nvar_w}")
+with left:
+    st.subheader("Ladeplan – Draufsicht (Text/Unicode, Monospace)")
+    render_text, used_cm = render_rows(rows, length_limit_cm=TRAILER_LEN_CM)
+    # Monospace-Codeblock für saubere Ausrichtung
+    st.markdown(f"```\n{render_text}\n```")
 
-    items_w, placed_w = weight_variants[st.session_state.w_idx]
-    render_board(items_w)
+    # Optionaler Längenbalken (vereinfacht)
+    if show_length_bar:
+        used_raster = cm_to_raster(used_cm)
+        bar = blocks(used_raster, "▆")
+        pad = " " * ((LENGTH_RASTER - used_raster) * CHARS_PER_BLOCK)
+        st.markdown(f"```\n{bar}{pad}\n```")
 
-    used_cm_w = used_length_cm_real(items_w)
-    share_w = used_cm_w / TRAILER_L if TRAILER_L else 0.0
-    st.markdown(f"**Genutzte Länge (realistisch):** {used_cm_w} cm von {TRAILER_L} cm (≈ {share_w:.0%})")
-    f_pct_w, r_pct_w = axle_balance(items_w)
-    st.markdown(f"**Achslast‑Schätzung:** vorne {f_pct_w}% / hinten {r_pct_w}%")
+with right:
+    st.subheader("Zusammenfassung")
+    st.write(f"**Preset:** {chosen_preset}")
+    st.write(f"**Euro-Paletten gesamt:** {total_pallets(rows)} (Ziel: {target_n})")
+    st.write(f"**Genutzte Länge:** {used_cm} cm von {TRAILER_LEN_CM} cm")
+    st.write(f"**Reihen:** {len(rows)}")
+    # Aufschlüsselung
+    t_long  = sum(1 for r in rows if r['type'] == "EURO_3_LONG")
+    t_q2    = sum(1 for r in rows if r['type'] == "EURO_2_TRANS")
+    t_q1    = sum(1 for r in rows if r['type'] == "EURO_1_TRANS")
+    st.write(f"- 3×Euro längs (120 cm): **{t_long} Reihen**  → {t_long*3} Paletten")
+    st.write(f"- 2×Euro quer (80 cm): **{t_q2} Reihen**  → {t_q2*2} Paletten")
+    st.write(f"- 1×Euro quer (80 cm): **{t_q1} Reihen**  → {t_q1} Palette")
 
-with st.expander("🔎 Legende / Hinweise"):
-    st.markdown(
-        "- **Farbcode:** Euro längs = hellblau, Euro quer = hellgrün, Industrie/IBC = orange\n"
-        "- Euro quer = 80×120 cm, Euro längs = 120×80 cm\n"
-        "- Industrie/IBC quer = 100×120 cm; schwere Güter eher hinten\n"
-        "- Puffer (Front/Heck) reduzieren die **effektive Länge**; links wird ein leerer Bereich dargestellt\n"
-        "- Achslast‑Schätzung ist **vereinfacht** und dient nur zur Orientierung"
-    )
+    if t_q1 > 0:
+        pos_txt = "Mitte" if single_pos == 2 else ("Links" if single_pos <= 1 else "Rechts")
+        st.caption(f"Einzel-quer Position: **{pos_txt}**")
+
+st.caption("Hinweis: Darstellung ist gerastert (25 Blöcke × 4 Zeichen). Berechnung erfolgt intern exakt in cm; "
+           "Unicode-Render bleibt stabil monospaced. Diese Clean-Basis enthält bewusst nur Euro-Logik (Industrie/Blumen ausblendbar).")
