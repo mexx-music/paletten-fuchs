@@ -1,8 +1,5 @@
 # app.py
-# Paletten Fuchs – Clean + große Grafik + Gewichtsmodus (mit korrekter FRONT/REAR-Platzierung)
-# + Inline 2×2 Vergleich (Toggle) + Tabs-Vergleich (Toggle)
-# - Große Draufsicht (matplotlib), keine Unicode-Zeilen
-# - Gewichtsmodus: kg/Palette, "schwere" markieren, Reihen mit schweren Paletten nach vorne/hinten platzieren
+# Paletten Fuchs – Grafik, Gewicht, Platzierung + Schwer-Block (mit Sortier-Option) + 2×2 + Tabs
 
 from typing import List, Dict, Optional, Tuple
 import streamlit as st
@@ -42,12 +39,10 @@ def cap_to_trailer(rows: List[Dict]) -> List[Dict]:
         s += L
     return out
 
-# ----- Euro-Layout mit Gewichts-PLATZIERUNG (front/rear korrekt) -----
+# --- Euro-Layout (ohne Gewichtsumordnung) ---
 def layout_for_preset_euro(
     n: int,
-    singles_front: int = 0,
-    heavy_count: int = 0,
-    heavy_pos: Optional[str] = None  # "front" | "rear" | None
+    singles_front: int = 0
 ) -> List[Dict]:
     rows: List[Dict] = []
     remaining = n
@@ -87,35 +82,10 @@ def layout_for_preset_euro(
             elif rest == 1:
                 rows.insert(0, euro_row_trans1())
 
-    # 6) Gewichts-Optimierung: ganze Reihen verschieben (korrekt von vorn ODER hinten zählen)
-    if heavy_pos in ("front", "rear") and heavy_count > 0:
-        if heavy_pos == "front":
-            moved, normal, cnt = [], [], 0
-            for r in rows:
-                if cnt < heavy_count:
-                    moved.append(r); cnt += r["pallets"]
-                else:
-                    normal.append(r)
-            rows = moved + normal
-        else:  # rear -> von HINTEN zählen
-            moved, normal, cnt = [], [], 0
-            for r in reversed(rows):
-                if cnt < heavy_count:
-                    moved.append(r); cnt += r["pallets"]
-                else:
-                    normal.append(r)
-            moved.reverse()
-            normal.reverse()
-            rows = normal + moved
-
     return rows
 
-# ----- Industrie-Layout mit Gewichts-PLATZIERUNG (front/rear korrekt) -----
-def layout_for_preset_industry(
-    n: int,
-    heavy_count: int = 0,
-    heavy_pos: Optional[str] = None
-) -> List[Dict]:
+# --- Industrie-Layout (ohne Gewichtsumordnung) ---
+def layout_for_preset_industry(n: int) -> List[Dict]:
     if n <= 0:
         return []
     rows: List[Dict] = []
@@ -125,28 +95,60 @@ def layout_for_preset_industry(
     if single:
         rows.append(ind_single())  # 1 vorne
     rows += [ind_row2_long() for _ in range(full)]
-
-    if heavy_pos in ("front", "rear") and heavy_count > 0:
-        if heavy_pos == "front":
-            moved, normal, cnt = [], [], 0
-            for r in rows:
-                if cnt < heavy_count:
-                    moved.append(r); cnt += r["pallets"]
-                else:
-                    normal.append(r)
-            rows = moved + normal
-        else:  # rear -> von HINTEN zählen
-            moved, normal, cnt = [], [], 0
-            for r in reversed(rows):
-                if cnt < heavy_count:
-                    moved.append(r); cnt += r["pallets"]
-                else:
-                    normal.append(r)
-            moved.reverse()
-            normal.reverse()
-            rows = normal + moved
-
     return rows
+
+# ------------------ GLOBAL: Schwer-Block bilden (keine leichten dazwischen) ------------------
+def _cat_of_row(r: Dict) -> str:
+    t = r.get("type","")
+    return "EURO" if t.startswith("EURO_") else ("IND" if t.startswith("IND") else "OTHER")
+
+def reorder_rows_heavy(rows: List[Dict],
+                       heavy_euro_count: int,
+                       heavy_ind_count: int,
+                       side: str = "front",              # "front" | "rear"
+                       group_by_type: bool = True,       # schweren Block nach Typ sortieren?
+                       type_order: Tuple[str,str] = ("EURO","IND")) -> List[Dict]:
+    """
+    Nimmt die ersten/hechsten 'heavy_*_count' Paletten entlang der Gesamt-Liste
+    und zieht sie als zusammenhängenden Block an die gewählte Seite.
+    Optional: im Block nach Typ sortieren (Euro/Ind) gemäß type_order.
+    """
+    if heavy_euro_count <= 0 and heavy_ind_count <= 0:
+        return rows
+
+    idx_iter = range(len(rows)) if side == "front" else reversed(range(len(rows)))
+    taken_idx_e, taken_idx_i = [], []
+    need_e, need_i = heavy_euro_count, heavy_ind_count
+
+    # 1) Kandidaten entlang der gewählten Seite aufsammeln
+    for i in idx_iter:
+        r = rows[i]; cat = _cat_of_row(r)
+        if cat == "EURO" and need_e > 0:
+            taken_idx_e.append(i); need_e -= r.get("pallets", 0)
+        elif cat == "IND" and need_i > 0:
+            taken_idx_i.append(i); need_i -= r.get("pallets", 0)
+        if need_e <= 0 and need_i <= 0:
+            break
+
+    taken = set(taken_idx_e + taken_idx_i)
+
+    # 2) Restliche Reihen bleiben in Originalreihenfolge
+    remaining = [r for j, r in enumerate(rows) if j not in taken]
+
+    # 3) Schwer-Block bauen (Indices sortieren, optional nach Typ ordnen)
+    block_e = [rows[j] for j in sorted(taken_idx_e)]
+    block_i = [rows[j] for j in sorted(taken_idx_i)]
+
+    if group_by_type:
+        block = []
+        for cat in type_order:
+            if cat == "EURO": block += block_e
+            elif cat == "IND": block += block_i
+    else:
+        block = [rows[j] for j in sorted(taken)]
+
+    # 4) Seite anwenden
+    return (block + remaining) if side == "front" else (remaining + block)
 
 # ------------------ Grafik (matplotlib) ------------------
 import matplotlib.pyplot as plt
@@ -237,10 +239,7 @@ def rows_to_rects_with_weights(
     # Euro markieren (front oder rear)
     euro_cnt = len(euro_rects)
     if heavy_euro_count > 0 and euro_cnt > 0:
-        if heavy_euro_side == "rear":
-            indices = list(reversed(euro_rects))[:heavy_euro_count]
-        else:
-            indices = euro_rects[:heavy_euro_count]
+        indices = (list(reversed(euro_rects)) if heavy_euro_side == "rear" else euro_rects)[:heavy_euro_count]
         for idx in indices:
             x0,y0,w0,h0,c0,cat0,_ = rects[idx]
             rects[idx] = (x0,y0,w0,h0,c0,cat0,True)
@@ -249,10 +248,7 @@ def rows_to_rects_with_weights(
     # Industrie markieren (front oder rear)
     ind_cnt = len(ind_rects)
     if heavy_ind_count > 0 and ind_cnt > 0:
-        if heavy_ind_side == "rear":
-            indices = list(reversed(ind_rects))[:heavy_ind_count]
-        else:
-            indices = ind_rects[:heavy_ind_count]
+        indices = (list(reversed(ind_rects)) if heavy_ind_side == "rear" else ind_rects)[:heavy_ind_count]
         for idx in indices:
             x0,y0,w0,h0,c0,cat0,_ = rects[idx]
             rects[idx] = (x0,y0,w0,h0,c0,cat0,True)
@@ -286,16 +282,12 @@ def draw_graph(
         euro_hvy = ind_hvy = 0
 
     fig, ax = plt.subplots(figsize=figsize)
-
-    # Trailer-Rahmen
     ax.add_patch(Rectangle((0, 0), TRAILER_LEN_CM, TRAILER_W_CM,
                            fill=False, linewidth=2, edgecolor="#333"))
 
-    # Paletten zeichnen
     for (x, y, w, h, c, cat, hvy) in rects:
         face = c
-        edge = EDGE
-        lw = 0.8
+        edge = "#4a4a4a"; lw = 0.8
         if weight_mode and hvy:
             edge = "#222222"; lw = 1.6
             face = {"#d9f2d9":"#bfe6bf", "#cfe8ff":"#a8d7ff", "#ffe2b3":"#ffd089"}.get(c, c)
@@ -303,8 +295,7 @@ def draw_graph(
 
     ax.set_xlim(0, TRAILER_LEN_CM)
     ax.set_ylim(0, TRAILER_W_CM)
-    ax.set_aspect('equal')
-    ax.axis('off')
+    ax.set_aspect('equal'); ax.axis('off')
     ax.set_title(title, fontsize=12, pad=6)
     st.pyplot(fig)
     import matplotlib.pyplot as _plt; _plt.close(fig)
@@ -313,7 +304,8 @@ def draw_graph(
         total = euro_cnt * kg_euro + ind_cnt * kg_ind
         front = euro_hvy * kg_euro + ind_hvy * kg_ind
         st.caption(
-            f"Gewicht: gesamt ≈ **{total:.0f} kg**, {'vorne' if heavy_side=='front' else 'hinten'} (markiert) ≈ **{front:.0f} kg**  "
+            f"Gewicht: gesamt ≈ **{total:.0f} kg**, "
+            f"{'vorne' if heavy_side=='front' else 'hinten'} (markiert) ≈ **{front:.0f} kg**  "
             f"(Euro: {euro_cnt}×{kg_euro} kg, Ind.: {ind_cnt}×{kg_ind} kg)"
         )
 
@@ -334,8 +326,8 @@ with c2:
 with c3:
     ind_n = st.number_input("Industrie-Paletten", 0, 40, 0, step=1)
 
-# Gewichts-Expander (optional, inkl. Platzierung)
-with st.expander("Gewicht & Platzierung (optional)", expanded=False):
+# Gewichts-Expander (optional, inkl. Seite + Block-Option)
+with st.expander("Gewicht, Platzierung & Block-Option (optional)", expanded=False):
     weight_mode = st.checkbox("Gewichtsmodus aktivieren", value=False)
     colw1, colw2, colw3 = st.columns(3)
     with colw1:
@@ -343,7 +335,7 @@ with st.expander("Gewicht & Platzierung (optional)", expanded=False):
     with colw2:
         kg_ind  = st.number_input("kg/Industrie", 0, 2500, 900, step=10)
     with colw3:
-        pos_choice = st.radio("Schwere markieren/platzieren ab", ["Vorne","Hinten"], index=0, horizontal=True)
+        pos_choice = st.radio("Schwere ab Seite", ["Vorne","Hinten"], index=0, horizontal=True)
     heavy_side = "front" if pos_choice == "Vorne" else "rear"
 
     colh1, colh2 = st.columns(2)
@@ -352,23 +344,34 @@ with st.expander("Gewicht & Platzierung (optional)", expanded=False):
     with colh2:
         hvy_i = st.number_input("Schwere Industrie (Stk.)", 0, 200, 0, step=1)
 
-# Reihen AUFBAU (mit optionaler PLATZIERUNG der „schweren“ Reihen)
-heavy_pos_for_build = heavy_side if (hvy_e or hvy_i) else None  # nur wenn Stückzahl > 0
+    colb1, colb2 = st.columns([1,1])
+    with colb1:
+        group_block = st.checkbox("Schwer-Block nach Typ sortieren", value=True,
+                                  help="Wenn aktiv: im Block zuerst eine Sorte, dann die andere.")
+    with colb2:
+        type_first = st.radio("Reihenfolge im Block", ["Euro zuerst", "Industrie zuerst"],
+                              index=0, horizontal=True)
+    type_order = ("EURO","IND") if type_first == "Euro zuerst" else ("IND","EURO")
+
+# 1) Reihen bauen (ohne Platzierung)
 rows_clean: List[Dict] = []
 if euro_n > 0:
-    rows_clean += layout_for_preset_euro(
-        euro_n,
-        singles_front=singles_front,
-        heavy_count=hvy_e,
-        heavy_pos=heavy_pos_for_build
-    )
+    rows_clean += layout_for_preset_euro(euro_n, singles_front=singles_front)
 if ind_n > 0:
-    rows_clean += layout_for_preset_industry(
-        ind_n,
-        heavy_count=hvy_i,
-        heavy_pos=heavy_pos_for_build
+    rows_clean += layout_for_preset_industry(ind_n)
+
+# 2) Schwer-Block global anwenden (nur wenn Gewicht aktiv + Mengen > 0)
+if weight_mode and (hvy_e or hvy_i):
+    rows_clean = reorder_rows_heavy(
+        rows_clean,
+        heavy_euro_count=hvy_e,
+        heavy_ind_count=hvy_i,
+        side=heavy_side,
+        group_by_type=group_block,
+        type_order=type_order
     )
 
+# 3) Zeichnen
 draw_graph(
     f"Clean: {euro_n} Euro (S{singles_front}) + {ind_n} Industrie",
     rows_clean,
@@ -394,9 +397,9 @@ def inline_four_variants_grid():
         with cc3:
             i = st.number_input(f"Industrie V{idx}", 0, 40, 0, step=1, key=f"iv_i{idx}")
 
-        with st.expander(f"Gewicht & Platzierung V{idx} (optional)", expanded=False):
+        with st.expander(f"Gewicht, Platzierung & Block V{idx} (optional)", expanded=False):
             wm = st.checkbox(f"Aktiv V{idx}", value=False, key=f"iv_wm{idx}")
-            cA, cB, cC, cD, cE = st.columns([1,1,1,1,1.2])
+            cA, cB, cC, cD = st.columns([1,1,1,1])
             with cA:
                 kge = st.number_input(f"kg Euro V{idx}", 0, 2000, 700, step=10, key=f"iv_kge{idx}")
             with cB:
@@ -405,19 +408,24 @@ def inline_four_variants_grid():
                 he  = st.number_input(f"schwere Euro V{idx}", 0, 200, 0, step=1, key=f"iv_he{idx}")
             with cD:
                 hi  = st.number_input(f"schwere Ind V{idx}", 0, 200, 0, step=1, key=f"iv_hi{idx}")
+            cE, cF, cG = st.columns([1,1,1.4])
             with cE:
-                pos = st.radio(f"Seite V{idx}", ["Vorne","Hinten"], index=0, horizontal=True, key=f"iv_pos{idx}")
-        heavy_side_v = "front" if pos == "Vorne" else "rear"
+                side_v = st.radio(f"Seite V{idx}", ["Vorne","Hinten"], index=0, horizontal=True, key=f"iv_side{idx}")
+            with cF:
+                group_v = st.checkbox("Block nach Typ sortieren", value=True, key=f"iv_group{idx}")
+            with cG:
+                order_v = st.radio("Reihenfolge", ["Euro zuerst","Industrie zuerst"], index=0, horizontal=True, key=f"iv_order{idx}")
+        heavy_side_v = "front" if side_v == "Vorne" else "rear"
+        type_order_v = ("EURO","IND") if order_v == "Euro zuerst" else ("IND","EURO")
 
-        # Reihen bauen (mit evtl. Platzierung)
-        heavy_pos_build_v = heavy_side_v if (he or hi) else None
+        # Reihen bauen (ohne Platzierung), dann globaler Schwer-Block falls aktiv
         r: List[Dict] = []
         if e > 0:
-            r += layout_for_preset_euro(e, singles_front=s,
-                                        heavy_count=he, heavy_pos=heavy_pos_build_v)
+            r += layout_for_preset_euro(e, singles_front=s)
         if i > 0:
-            r += layout_for_preset_industry(i,
-                                            heavy_count=hi, heavy_pos=heavy_pos_build_v)
+            r += layout_for_preset_industry(i)
+        if wm and (he or hi):
+            r = reorder_rows_heavy(r, he, hi, side=heavy_side_v, group_by_type=group_v, type_order=type_order_v)
         title = f"V{idx}: {e} Euro (S{s}) + {i} Ind."
         return r, title, wm, kge, kgi, he, hi, heavy_side_v
 
@@ -458,9 +466,9 @@ def compare_tabs_four_variants():
             s = st.slider(f"Einzel (V{idx})", 0, 2, defaults[1], key=f"tv_s{idx}")
             i = st.number_input(f"Industrie (V{idx})", 0, 40, defaults[2], step=1, key=f"tv_i{idx}")
 
-            with st.expander(f"Gewicht & Platzierung V{idx} (optional)", expanded=False):
+            with st.expander(f"Gewicht, Platzierung & Block V{idx} (optional)", expanded=False):
                 wm = st.checkbox(f"Aktiv V{idx}", value=False, key=f"tv_wm{idx}")
-                cA, cB, cC, cD, cE = st.columns([1,1,1,1,1.2])
+                cA, cB, cC, cD = st.columns([1,1,1,1])
                 with cA:
                     kge = st.number_input(f"kg Euro V{idx}", 0, 2000, 700, step=10, key=f"tv_kge{idx}")
                 with cB:
@@ -469,22 +477,28 @@ def compare_tabs_four_variants():
                     he  = st.number_input(f"schwere Euro V{idx}", 0, 200, 0, step=1, key=f"tv_he{idx}")
                 with cD:
                     hi  = st.number_input(f"schwere Ind V{idx}", 0, 200, 0, step=1, key=f"tv_hi{idx}")
+                cE, cF, cG = st.columns([1,1,1.4])
                 with cE:
-                    pos = st.radio(f"Seite V{idx}", ["Vorne","Hinten"], index=0, horizontal=True, key=f"tv_pos{idx}")
-            side = "front" if pos == "Vorne" else "rear"
+                    side_v = st.radio(f"Seite V{idx}", ["Vorne","Hinten"], index=0, horizontal=True, key=f"tv_side{idx}")
+                with cF:
+                    group_v = st.checkbox("Block nach Typ sortieren", value=True, key=f"tv_group{idx}")
+                with cG:
+                    order_v = st.radio("Reihenfolge", ["Euro zuerst","Industrie zuerst"], index=0, horizontal=True, key=f"tv_order{idx}")
+            heavy_side_v = "front" if side_v == "Vorne" else "rear"
+            type_order_v = ("EURO","IND") if order_v == "Euro zuerst" else ("IND","EURO")
 
-            heavy_pos_build = side if (he or hi) else None
+            # Reihen bauen (ohne Platzierung), dann Schwer-Block falls aktiv
             r: List[Dict] = []
             if e > 0:
-                r += layout_for_preset_euro(e, singles_front=s,
-                                            heavy_count=he, heavy_pos=heavy_pos_build)
+                r += layout_for_preset_euro(e, singles_front=s)
             if i > 0:
-                r += layout_for_preset_industry(i,
-                                                heavy_count=hi, heavy_pos=heavy_pos_build)
+                r += layout_for_preset_industry(i)
+            if wm and (he or hi):
+                r = reorder_rows_heavy(r, he, hi, side=heavy_side_v, group_by_type=group_v, type_order=type_order_v)
 
             draw_graph(f"V{idx}: {e} Euro (S{s}) + {i} Ind.", r,
                        weight_mode=wm, kg_euro=kge, kg_ind=kgi,
-                       heavy_euro_count=he, heavy_ind_count=hi, heavy_side=side)
+                       heavy_euro_count=he, heavy_ind_count=hi, heavy_side=heavy_side_v)
 
     var_ui(tab1, 1, (33, 0, 0))
     var_ui(tab2, 2, (32, 2, 0))
@@ -494,5 +508,5 @@ def compare_tabs_four_variants():
 if SHOW_TABS:
     compare_tabs_four_variants()
 
-st.caption("Gewichtsmodus: markiert schwere Paletten und ordnet deren REIHEN auf Wunsch vorne/hinten an. "
-           "Grafik im Maßstab 1360×240 cm. Farben: Grün=Euro längs, Blau=Euro quer, Orange=Industrie.")
+st.caption("Grafik im Maßstab 1360×240 cm. Grün=Euro längs (120×80), Blau=Euro quer (80×120), Orange=Industrie (120×100). "
+           "Gewichtsmodus: schwere markieren + als zusammenhängenden Block vorne/hinten (optional nach Typ sortiert).")
