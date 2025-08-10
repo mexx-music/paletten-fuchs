@@ -151,20 +151,42 @@ st.title("🦊 Paletten Fuchs – Drag & Drop (Kühler 1360×245 cm)")
 
 with st.sidebar:
     st.subheader("📦 Paletten anlegen")
-    n_euro = st.number_input("Euro (120×80)", 0, 45, 12, 1)
-    n_ind  = st.number_input("Industrie (100×120 quer)", 0, 30, 4, 1)
-    n_ibc  = st.number_input("IBC (schwer)", 0, 30, 0, 1)
 
-    st.markdown("---")
-    st.subheader("📂 Layout laden")
-    layouts = list_layout_files()
-    load_choice = st.selectbox("Vorhandene Layouts (JSON)", ["– nichts –"] + [p.name for p in layouts], index=0)
+    # --> WICHTIG: alle Parameter benannt + format und eindeutige keys
+    n_euro = st.number_input(
+        label="Euro (120×80)",
+        min_value=0,
+        max_value=45,
+        value=12,
+        step=1,
+        format="%d",
+        key="n_euro_input",
+    )
+    n_ind = st.number_input(
+        label="Industrie (100×120 quer)",
+        min_value=0,
+        max_value=30,
+        value=4,
+        step=1,
+        format="%d",
+        key="n_ind_input",
+    )
+    n_ibc = st.number_input(
+        label="IBC (schwer)",
+        min_value=0,
+        max_value=30,
+        value=0,
+        step=1,
+        format="%d",
+        key="n_ibc_input",
+    )
 
+    # Erst NACH den Inputs initialisieren – und mit einem eigenen Key
     if "init_json" not in st.session_state:
-        st.session_state.init_json = spawn_initial_objects(n_euro, n_ind, n_ibc)
+        st.session_state.init_json = spawn_initial_objects(int(n_euro), int(n_ind), int(n_ibc))
 
-    if st.button("Neu befüllen (leer)"):
-        st.session_state.init_json = spawn_initial_objects(n_euro, n_ind, n_ibc)
+    if st.button("Neu befüllen", key="refill_btn"):
+        st.session_state.init_json = spawn_initial_objects(int(n_euro), int(n_ind), int(n_ibc))
 
     if load_choice != "– nichts –":
         path = SAVE_DIR / load_choice
