@@ -553,64 +553,78 @@ if INLINE_GRID_ON:
     inline_four_variants_grid()
 
 # ------------------ Vergleich (Tabs) – 4 Varianten (optional) ------------------
+# ===================== TABS (FIX) =====================
 def compare_tabs_four_variants():
     st.subheader("Vergleich (Tabs) – 4 Varianten")
 
-    def tab_ui(label, defaults=(33,0,0)):
-        with st.tab(label):
-            e = st.number_input(f"Euro ({label})", 0, 40, defaults[0], step=1, key=f"tv_e_{label}")
-            s = st.slider(f"Einzel ({label})", 0, 2, defaults[1], key=f"tv_s_{label}")
-            i = st.number_input(f"Industrie ({label})", 0, 40, defaults[2], step=1, key=f"tv_i_{label}")
+    labels   = ["Var 1", "Var 2", "Var 3", "Var 4"]
+    defaults = [(33,0,0), (32,2,0), (31,1,0), (24,0,0)]
 
-            with st.expander(f"Gewicht ({label})", expanded=False):
-                m = st.radio(f"Modus ({label})",
-                             ["Aus", "Block vorne", "Block hinten", "Verteilen (Hecklast)"],
-                             index=0, horizontal=True, key=f"tv_mode_{label}")
-                wm = (m != "Aus")
-                kge = kgi = 0
-                he = hi = 0
-                group_v = True
-                order_v = ("EURO","IND")
-                heavy_total_v = 0
-                if wm:
-                    kge = st.number_input(f"kg Euro ({label})", 0, 2000, 700, step=10, key=f"tv_kge_{label}")
-                    kgi = st.number_input(f"kg Ind ({label})", 0, 2500, 900, step=10, key=f"tv_kgi_{label}")
-                    if m in ("Block vorne","Block hinten"):
-                        he  = st.number_input(f"schwere Euro ({label})", 0, 200, 0, step=1, key=f"tv_he_{label}")
-                        hi  = st.number_input(f"schwere Ind ({label})", 0, 200, 0, step=1, key=f"tv_hi_{label}")
-                        group_v = st.checkbox("Block nach Typ sortieren", value=True, key=f"tv_group_{label}")
-                        ord_lbl = st.radio("Reihenfolge", ["Euro zuerst","Industrie zuerst"],
-                                           index=0, horizontal=True, key=f"tv_order_{label}")
-                        order_v = ("EURO","IND") if ord_lbl=="Euro zuerst" else ("IND","EURO")
-                    else:
-                        heavy_total_v = st.number_input(f"Gesamt schwer ({label})", 0, 200, 20, step=1, key=f"tv_ht_{label}")
+    tab_objs = st.tabs(labels)
+    for tab, label, df in zip(tab_objs, labels, defaults):
+        tab_ui(tab, label, df)
 
-            # Reihen
-            r: List[Dict] = []
-            if e > 0: r += layout_for_preset_euro(e, singles_front=s)
-            if i > 0: r += layout_for_preset_industry(i)
 
-            # Gewichtslogik
-            heavy_rows_v: Optional[Set[int]] = None
+def tab_ui(tab, label, defaults=(33,0,0)):
+    with tab:
+        e = st.number_input(f"Euro ({label})", 0, 40, defaults[0], step=1, key=f"tv_e_{label}")
+        s = st.slider(f"Einzel ({label})", 0, 2, defaults[1], key=f"tv_s_{label}")
+        i = st.number_input(f"Industrie ({label})", 0, 40, defaults[2], step=1, key=f"tv_i_{label}")
+
+        with st.expander(f"Gewicht ({label})", expanded=False):
+            m = st.radio(f"Modus ({label})",
+                         ["Aus", "Block vorne", "Block hinten", "Verteilen (Hecklast)"],
+                         index=0, horizontal=True, key=f"tv_mode_{label}")
+            wm = (m != "Aus")
+            kge = kgi = 0
+            he = hi = 0
+            group_v = True
+            order_v = ("EURO","IND")
+            heavy_total_v = 0
             if wm:
-                if m == "Block vorne":
-                    r = reorder_rows_heavy(r, he, hi, side="front", group_by_type=group_v, type_order=order_v)
-                elif m == "Block hinten":
-                    r = reorder_rows_heavy(r, he, hi, side="rear", group_by_type=group_v, type_order=order_v)
-                elif m == "Verteilen (Hecklast)":
-                    total_pal_v = sum(x.get("pallets",0) for x in r)
-                    qty = min(heavy_total_v, total_pal_v)
-                    if qty >= total_pal_v:
-                        heavy_rows_v = set(range(len(r)))
-                    else:
-                        heavy_rows_v = pick_heavy_rows_rear_biased(r, qty)
+                kge = st.number_input(f"kg Euro ({label})", 0, 2000, 700, step=10, key=f"tv_kge_{label}")
+                kgi = st.number_input(f"kg Ind ({label})", 0, 2500, 900, step=10, key=f"tv_kgi_{label}")
+                if m in ("Block vorne","Block hinten"):
+                    he  = st.number_input(f"schwere Euro ({label})", 0, 200, 0, step=1, key=f"tv_he_{label}")
+                    hi  = st.number_input(f"schwere Ind ({label})", 0, 200, 0, step=1, key=f"tv_hi_{label}")
+                    group_v = st.checkbox("Block nach Typ sortieren", value=True, key=f"tv_group_{label}")
+                    ord_lbl = st.radio("Reihenfolge", ["Euro zuerst","Industrie zuerst"],
+                                       index=0, horizontal=True, key=f"tv_order_{label}")
+                    order_v = ("EURO","IND") if ord_lbl=="Euro zuerst" else ("IND","EURO")
+                else:
+                    heavy_total_v = st.number_input(f"Gesamt schwer ({label})", 0, 200, 20, step=1, key=f"tv_ht_{label}")
 
-            draw_graph(f"{label}: {e} Euro (S{s}) + {i} Ind.", r,
-                       weight_mode=wm, kg_euro=kge, kg_ind=kgi,
-                       heavy_euro_count=he if m in ("Block vorne","Block hinten") else 0,
-                       heavy_ind_count=hi if m in ("Block vorne","Block hinten") else 0,
-                       heavy_side=("rear" if m=="Block hinten" else "front"),
-                       heavy_rows=heavy_rows_v if m=="Verteilen (Hecklast)" else None)
+        # Reihen bauen
+        r: List[Dict] = []
+        if e > 0: r += layout_for_preset_euro(e, singles_front=s)
+        if i > 0: r += layout_for_preset_industry(i)
+
+        # Gewichtslogik
+        heavy_rows_v: Optional[set[int]] = None
+        if wm:
+            if m == "Block vorne":
+                r = reorder_rows_heavy(r, he, hi, side="front", group_by_type=group_v, type_order=order_v)
+            elif m == "Block hinten":
+                r = reorder_rows_heavy(r, he, hi, side="rear", group_by_type=group_v, type_order=order_v)
+            elif m == "Verteilen (Hecklast)":
+                total_pal_v = sum(x.get("pallets",0) for x in r)
+                qty = min(heavy_total_v, total_pal_v)
+                if qty >= total_pal_v:
+                    heavy_rows_v = set(range(len(r)))
+                else:
+                    heavy_rows_v = pick_heavy_rows_rear_biased(r, qty)
+
+        draw_graph(f"{label}: {e} Euro (S{s}) + {i} Ind.", r,
+                   weight_mode=wm, kg_euro=kge, kg_ind=kgi,
+                   heavy_euro_count=he if m in ("Block vorne","Block hinten") else 0,
+                   heavy_ind_count=hi if m in ("Block vorne","Block hinten") else 0,
+                   heavy_side=("rear" if m=="Block hinten" else "front"),
+                   heavy_rows=heavy_rows_v if m=="Verteilen (Hecklast)" else None)
+
+# Aufruf:
+if SHOW_TABS:
+    compare_tabs_four_variants()
+# ===================== /TABS =====================
 
     tab1, tab2, tab3, tab4 = st.tabs(["Var 1", "Var 2", "Var 3", "Var 4"])
     with tab1: tab_ui("Var 1", (33,0,0))
