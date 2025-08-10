@@ -1,5 +1,8 @@
-import os, time, streamlit as st
+import os, time, subprocess, streamlit as st
 st.write("🔎 BUILD:", time.strftime("%Y-%m-%d %H:%M:%S"))
-st.write("📄 Datei:", __file__)
-st.write("📂 CWD:", os.getcwd())
-st.write("🧱 Streamlit:", st.__version__)
+try:
+    git_sha = subprocess.check_output(["git","rev-parse","--short","HEAD"], text=True).strip()
+except Exception:
+    git_sha = os.environ.get("GIT_SHA","?")
+st.write("🔀 COMMIT:", git_sha)
+st.write("📄 MAIN FILE:", __file__)
