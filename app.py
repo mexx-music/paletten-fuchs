@@ -1,32 +1,37 @@
-# app.py — Pal Fuchs: Varianten, Gewichtsmodus & Heavy-Presets 21/22/23/24
+# app.py — Pal Fuchs: Presets 21/22/23/24 (Heavy), Industrie Toggle (Option B), Euro Toggle
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Tuple, Dict
 import streamlit as st
 
-# ---------- TRAILER & PAL CONSTANTS ----------
-TRAILER_L = 1360  # cm (innen)
-TRAILER_W = 245   # cm
+# ---------- Trailer / Pal Constants ----------
+TRAILER_L = 1360  # cm inside length
+TRAILER_W = 245   # cm inside width
 
-EURO_DEPTH_LONG = 120  # cm
-EURO_WIDTH_LONG = 80   # cm
-EURO_DEPTH_CROSS = 80  # cm
-EURO_WIDTH_CROSS = 120 # cm
+# Euro 120x80
+EURO_DEPTH_LONG  = 120
+EURO_WIDTH_LONG  = 80
+EURO_DEPTH_CROSS = 80
+EURO_WIDTH_CROSS = 120
 
-INDUSTRIE_DEPTH = 100  # cm
-INDUSTRIE_WIDTH = 120  # cm
+# Industrie / IBC 100x120 (quer)
+INDUSTRIE_DEPTH = 100
+INDUSTRIE_WIDTH = 120
 
+# Weights
 EURO_NORMAL_KG = 250
 EURO_HEAVY_KG  = 400
-INDUSTRIE_LIGHT_WEIGHT = 600
-INDUSTRIE_HEAVY_WEIGHT = 1100  # IBC
+INDUSTRIE_LIGHT_KG = 600
+INDUSTRIE_HEAVY_KG = 1100  # IBC
 
-# UI Defaults
-DEFAULT_CELL_CM  = 40
-DEFAULT_CELL_PX  = 6
+# UI defaults
+DEFAULT_CELL_CM   = 40
+DEFAULT_CELL_PX   = 6
 DEFAULT_AUTO_ZOOM = False
-DEFAULT_FRONT_BUFFER = 20
-DEFAULT_REAR_BUFFER  = 0
+
+# Kühlsattel buffers (fixed)
+DEFAULT_FRONT_BUFFER = 20  # cm
+DEFAULT_REAR_BUFFER  = 0   # cm
 
 @dataclass
 class PalletType:
@@ -41,10 +46,11 @@ EURO = PalletType("Euro",
                   EURO_DEPTH_LONG, EURO_WIDTH_LONG,
                   EURO_DEPTH_CROSS, EURO_WIDTH_CROSS,
                   EURO_NORMAL_KG)
-IND  = PalletType("Industrie",
-                  INDUSTRIE_DEPTH, INDUSTRIE_WIDTH,
-                  INDUSTRIE_DEPTH,  INDUSTRIE_WIDTH,
-                  INDUSTRIE_LIGHT_WEIGHT)
+
+IND = PalletType("Industrie",
+                 INDUSTRIE_DEPTH, INDUSTRIE_WIDTH,
+                 INDUSTRIE_DEPTH, INDUSTRIE_WIDTH,
+                 INDUSTRIE_LIGHT_KG)
 
 class PalFuchs:
     def __init__(self, cell_cm: int, cell_px: int, auto_zoom: bool,
@@ -56,8 +62,9 @@ class PalFuchs:
         self.rear_buffer  = rear_buffer
         self._compute_grid()
 
-    # ---- Grid helpers ----
-    def _ceil_div(self, a, b): return -(-a // b)
+    # ---------- Grid helpers ----------
+    @staticmethod
+    def _ceil_div(a, b): return -(-a // b)
 
     def _compute_grid(self):
         self.X = self._ceil_div(TRAILER_L, self.cell_cm)
@@ -71,24 +78,26 @@ class PalFuchs:
         return self._ceil_div(depth_cm, self.cell_cm), self._ceil_div(width_cm, self.cell_cm)
 
     def long_lanes(self) -> List[int]:
+        """3 Bänder für Euro-längs gleichmäßig über die Breite verteilen"""
         _, dy = self.span_cells(EURO_DEPTH_LONG, EURO_WIDTH_LONG)
         total_gap = max(0, self.Y - 3*dy)
         g = total_gap // 4
         r = total_gap % 4
         gaps = [g,g,g,g]
-        for i in range(r): gaps[i]+=1
+        for i in range(r): gaps[i] += 1
         y1 = gaps[0]
         y2 = y1 + dy + gaps[1]
         y3 = y2 + dy + gaps[2]
         return [y1, y2, min(y3, max(0, self.Y - dy))]
 
-    def center_in_band(self, band_y: int, band_h: int, h: int) -> int:
-        return max(0, min(band_y + max(0, (band_h - h)//2), max(0, self.Y - h)))
+    @staticmethod
+    def center_in_band(band_y: int, band_h: int, h: int, max_y: int) -> int:
+        return max(0, min(band_y + max(0, (band_h - h)//2), max(0, max_y - h)))
 
-    # ---- Board state ----
+    # ---------- Board state ----------
     def empty(self):
         occ = [[False]*self.X for _ in range(self.Y)]
-        return occ, [], {"Euro":0,"Industrie":0,"IBC":0}  # items: (x,y,dx,dy,typ,ori,kg)
+        return occ, [], {"Euro":0, "Industrie":0, "IBC":0}  # items: (x,y,dx,dy,typ,ori,kg)
 
     def is_free(self, occ, x,y,dx,dy) -> bool:
         if x<0 or y<0 or x+dx>self.X or y+dy>self.Y: return False
@@ -102,10 +111,11 @@ class PalFuchs:
             for xx in range(x,x+dx):
                 occ[yy][xx] = True
         items.append((x,y,dx,dy,typ,ori,kg))
-        placed[typ] = placed.get(typ,0)+1
+        placed[typ] = placed.get(typ,0) + 1
 
-    # ---- Column placers ----
-    def place_euro_column(self, occ, items, placed, x, count, orient, euro_kg) -> int:
+    # ---------- Euro columns ----------
+    def _euro_column(self, occ, items, placed, x, count, orient, euro_kg) -> int:
+        """Platziert bis zu 3 Euro in einer Spalte, passend zu Bändern."""
         if orient=="long":
             dx,dy = self.span_cells(EURO_DEPTH_LONG, EURO_WIDTH_LONG)
             lanes = self.long_lanes()
@@ -113,122 +123,127 @@ class PalFuchs:
             dx,dy = self.span_cells(EURO_DEPTH_CROSS, EURO_WIDTH_CROSS)
             lanes_long = self.long_lanes()
             _, dy_l = self.span_cells(EURO_DEPTH_LONG, EURO_WIDTH_LONG)
-            lanes = [ self.center_in_band(lanes_long[i], dy_l, dy) for i in (0,1,2) ]
+            lanes = [
+                self.center_in_band(lanes_long[0], dy_l, dy, self.Y),
+                self.center_in_band(lanes_long[1], dy_l, dy, self.Y),
+                self.center_in_band(lanes_long[2], dy_l, dy, self.Y),
+            ]
         if x+dx>self.X: return 0
         placed_in_col = 0
+
         if count==1 and len(lanes)>=2:
-            y=lanes[1]
+            y = lanes[1]  # Mitte
             if self.is_free(occ,x,y,dx,dy):
-                self.place(occ,items,placed,x,y,dx,dy,"Euro",orient,euro_kg); return 1
+                self.place(occ,items,placed,x,y,dx,dy,"Euro",orient,euro_kg)
+                return 1
+
         if count>=2 and len(lanes)>=3:
-            for y in [lanes[0], lanes[2]]:
+            for y in (lanes[0], lanes[2]):   # oben + unten
                 if placed_in_col<2 and self.is_free(occ,x,y,dx,dy):
                     self.place(occ,items,placed,x,y,dx,dy,"Euro",orient,euro_kg)
                     placed_in_col+=1
-            if placed_in_col: return placed_in_col
+            if placed_in_col>0: return placed_in_col
+
         if count>=3:
-            for y in lanes:
+            for y in lanes:                   # oben, mitte, unten
                 if placed_in_col<3 and self.is_free(occ,x,y,dx,dy):
                     self.place(occ,items,placed,x,y,dx,dy,"Euro",orient,euro_kg)
                     placed_in_col+=1
         return placed_in_col
 
-    def fill_euro_full(self, occ, items, placed, x, euro_left, orient, euro_kg):
+    def _fill_euro_full(self, occ, items, placed, x, euro_left, orient, euro_kg):
         dx,_ = self.span_cells(*( (EURO_DEPTH_LONG, EURO_WIDTH_LONG) if orient=="long"
                                   else (EURO_DEPTH_CROSS,EURO_WIDTH_CROSS)))
         while euro_left>=3 and x+dx<=self.X:
-            c = self.place_euro_column(occ,items,placed,x,3,orient,euro_kg)
+            c = self._euro_column(occ,items,placed,x,3,orient,euro_kg)
             if c==3: euro_left-=3; x+=dx
             else: break
         return x, euro_left
 
-    def tail_close_euro(self, occ, items, placed, x, euro_left, euro_kg) -> int:
+    def _tail_close_euro(self, occ, items, placed, x, euro_left, euro_kg) -> int:
+        """Remainder: vermeidet einzelne lange vorne; quer bevorzugt."""
         if euro_left<=0: return 0
-        # 1) try 3 long, else 3 cross
+        # 3 long → sonst 3 cross
         for orient in ("long","cross"):
             if euro_left>=3:
-                c = self.place_euro_column(occ,items,placed,x,3,orient,euro_kg)
+                c = self._euro_column(occ,items,placed,x,3,orient,euro_kg)
                 if c==3: return 3
-        # 2) try 2 long, else 2 cross
+        # 2 long → sonst 2 cross
         for orient in ("long","cross"):
             if euro_left>=2:
-                c = self.place_euro_column(occ,items,placed,x,2,orient,euro_kg)
+                c = self._euro_column(occ,items,placed,x,2,orient,euro_kg)
                 if c>0: return c
-        # 3) single: **always cross center**, last resort long
-        c = self.place_euro_column(occ,items,placed,x,1,"cross",euro_kg)
+        # 1 cross (Mitte) → sonst 1 long
+        c = self._euro_column(occ,items,placed,x,1,"cross",euro_kg)
         if c==1: return 1
-        return self.place_euro_column(occ,items,placed,x,1,"long",euro_kg)
+        return self._euro_column(occ,items,placed,x,1,"long",euro_kg)
 
-    def block_industry_pairs(self, occ, items, placed, n_light, n_ibc) -> int:
-        """Fill columns left→right; each column: TOP+BOTTOM.
-           Light first, then IBC. Singles werden hinten (BOTTOM) gesetzt."""
-        dx_i, dy_i = self.span_cells(INDUSTRIE_DEPTH, INDUSTRIE_WIDTH)
+    # ---------- Industrie / IBC (Option B) ----------
+    def block_industry_pairs(self, occ, items, placed, n_industry: int, heavy: bool) -> int:
+        """Eine Spalte = oben+unten. Bei Rest 1 Stück → unten (hinten)."""
+        dx,dy = self.span_cells(INDUSTRIE_DEPTH, INDUSTRIE_WIDTH)
         lanes_long = self.long_lanes()
         _, dy_l = self.span_cells(EURO_DEPTH_LONG, EURO_WIDTH_LONG)
-        top_y = self.center_in_band(lanes_long[0], dy_l, dy_i)
-        bot_y = self.center_in_band(lanes_long[2], dy_l, dy_i)
+        top_y = self.center_in_band(lanes_long[0], dy_l, dy, self.Y)
+        bot_y = self.center_in_band(lanes_long[2], dy_l, dy, self.Y)
 
         x = self.x_off
-        def try_put(y, typ, kg):
-            if self.is_free(occ,x,y,dx_i,dy_i):
-                self.place(occ,items,placed,x,y,dx_i,dy_i,typ,"cross",kg); return True
-            return False
+        typ = "IBC" if heavy else "Industrie"
+        kg  = INDUSTRIE_HEAVY_KG if heavy else INDUSTRIE_LIGHT_KG
 
-        # Light first
-        while n_light>0 and x+dx_i<=self.X:
-            filled=0
-            for y in [top_y, bot_y]:
-                if n_light>0 and try_put(y,"Industrie",INDUSTRIE_LIGHT_WEIGHT):
-                    n_light-=1; filled+=1
-            if filled: x+=dx_i
-            else: x+=1
-
-        # Then IBC heavy (prefer BOTTOM → then TOP). Singles gehen auf BOTTOM.
-        while n_ibc>0 and x+dx_i<=self.X:
-            filled=0
-            for y in [bot_y, top_y]:
-                if n_ibc>0 and try_put(y,"IBC",INDUSTRIE_HEAVY_WEIGHT):
-                    n_ibc-=1; filled+=1
-            if filled: x+=dx_i
-            else: x+=1
-
+        while n_industry>0 and x+dx<=self.X:
+            filled = 0
+            # zu zweit: oben+unten füllen
+            for y in ([top_y, bot_y] if not heavy else [bot_y, top_y]):  # schwere zuerst unten
+                if n_industry>0 and self.is_free(occ,x,y,dx,dy):
+                    self.place(occ,items,placed,x,y,dx,dy,typ,"cross",kg)
+                    n_industry -= 1
+                    filled += 1
+            # bei Rest=1: unten bevorzugen
+            if filled==0 and n_industry>0:
+                y = bot_y
+                if self.is_free(occ,x,y,dx,dy):
+                    self.place(occ,items,placed,x,y,dx,dy,typ,"cross",kg)
+                    n_industry -= 1
+                    filled = 1
+            x += dx if filled else 1
         return x
 
-    # ---- Variants ----
-    def generate_variants(self, n_euro:int, n_light:int, n_ibc:int, euro_kg:int):
-        variants=[]
+    # ---------- Variants ----------
+    def variants(self, n_euro:int, euro_kg:int, n_ind:int, ind_heavy:bool):
+        out=[]
         gens=[self._v_cross_heavy, self._v_long_heavy, self._v_only_long, self._v_mixed, self._v_balanced]
         names=["Cross-heavy","Long-heavy","Only long","Mixed lanes","Balanced"]
         for name,gen in zip(names,gens):
             occ,items,placed = self.empty()
-            x = self.block_industry_pairs(occ,items,placed,n_light,n_ibc) if (n_light or n_ibc) else self.x_off
+            x = self.block_industry_pairs(occ,items,placed,n_ind,ind_heavy) if n_ind>0 else self.x_off
             gen(occ,items,placed,x,n_euro,euro_kg)
-            variants.append((items,placed,name))
-        return variants
+            out.append((items,placed,name))
+        return out
 
     def _v_cross_heavy(self, occ,items,placed,x,n,euro_kg):
         dx,_ = self.span_cells(EURO_DEPTH_CROSS, EURO_WIDTH_CROSS)
         while n>=2 and x+dx<=self.X:
-            c = self.place_euro_column(occ,items,placed,x,2,"cross",euro_kg)
+            c = self._euro_column(occ,items,placed,x,2,"cross",euro_kg)
             if c>0: n-=c; x+=dx
             else: break
         while n>0 and x<self.X:
-            c = self.tail_close_euro(occ,items,placed,x,n,euro_kg)
+            c = self._tail_close_euro(occ,items,placed,x,n,euro_kg)
             if c<=0: break
             n-=c; x+=dx
 
     def _v_long_heavy(self, occ,items,placed,x,n,euro_kg):
-        x,n = self.fill_euro_full(occ,items,placed,x,n,"long",euro_kg)
+        x,n = self._fill_euro_full(occ,items,placed,x,n,"long",euro_kg)
         dx,_ = self.span_cells(EURO_DEPTH_LONG, EURO_WIDTH_LONG)
         while n>0 and x<self.X:
-            c=self.tail_close_euro(occ,items,placed,x,n,euro_kg)
+            c = self._tail_close_euro(occ,items,placed,x,n,euro_kg)
             if c<=0: break
             n-=c; x+=dx
 
     def _v_only_long(self, occ,items,placed,x,n,euro_kg):
         dx,_ = self.span_cells(EURO_DEPTH_LONG, EURO_WIDTH_LONG)
         while n>0 and x+dx<=self.X:
-            c=self.place_euro_column(occ,items,placed,x,min(3,n),"long",euro_kg)
+            c = self._euro_column(occ,items,placed,x, min(3,n), "long", euro_kg)
             if c>0: n-=c; x+=dx
             else: break
 
@@ -236,91 +251,90 @@ class PalFuchs:
         dxL,_ = self.span_cells(EURO_DEPTH_LONG, EURO_WIDTH_LONG)
         dxQ,_ = self.span_cells(EURO_DEPTH_CROSS, EURO_WIDTH_CROSS)
         while n>0 and x<self.X:
-            c=self.place_euro_column(occ,items,placed,x,min(3,n),"long",euro_kg)
+            c = self._euro_column(occ,items,placed,x, min(3,n), "long", euro_kg)
             if c>0: n-=c; x+=dxL; continue
-            c=self.place_euro_column(occ,items,placed,x,min(2,n),"cross",euro_kg)
+            c = self._euro_column(occ,items,placed,x, min(2,n), "cross",euro_kg)
             if c>0: n-=c; x+=dxQ; continue
             x+=1
 
     def _v_balanced(self, occ,items,placed,x,n,euro_kg):
         dxL,_ = self.span_cells(EURO_DEPTH_LONG, EURO_WIDTH_LONG)
         dxQ,_ = self.span_cells(EURO_DEPTH_CROSS, EURO_WIDTH_CROSS)
-        use_long=True
+        use_long = True
         while n>0 and x<self.X:
             if use_long and x+dxL<=self.X:
-                c=self.place_euro_column(occ,items,placed,x,min(3,n),"long",euro_kg)
+                c = self._euro_column(occ,items,placed,x, min(3,n), "long", euro_kg)
                 if c>0: n-=c; x+=dxL; use_long=False; continue
             if (not use_long) and x+dxQ<=self.X:
-                c=self.place_euro_column(occ,items,placed,x,min(2,n),"cross",euro_kg)
+                c = self._euro_column(occ,items,placed,x, min(2,n), "cross",euro_kg)
                 if c>0: n-=c; x+=dxQ; use_long=True; continue
             # fallback
-            c=self.place_euro_column(occ,items,placed,x,min(3,n),"long",euro_kg)
+            c = self._euro_column(occ,items,placed,x, min(3,n), "long", euro_kg)
             if c>0: n-=c; x+=dxL; continue
             x+=1
 
-    # ---- Deterministische Front-Rezepte 24/23/22/21 (schwer optimiert) ----
-    def recipe_front(self, n_euro:int, n_light:int, n_ibc:int, euro_kg:int):
-        """Explizite Muster:
-           24: 8× (3 long)
-           23: 1× (2 cross außen) + 7× (3 long)
-           22: 1× (1 cross mittig) + 7× (3 long)
-           21: 7× (3 long)
-           Sonst: generische n%3‑Variante (quer seed → long → tail)"""
+    # ---------- Deterministic heavy recipes 21/22/23/24 ----------
+    def recipe_heavy_21_24(self, n_euro:int, n_ind:int, ind_heavy:bool, euro_kg:int):
+        """Fixe Muster:
+           24: 8×(3 long)
+           23: seed 2×cross (oben+unten) + 7×(3 long)
+           22: seed 1×cross (Mitte)      + 7×(3 long)
+           21: 7×(3 long)
+        """
         occ,items,placed = self.empty()
-        x = self.block_industry_pairs(occ,items,placed,n_light,n_ibc) if (n_light or n_ibc) else self.x_off
-        dxL,_ = self.span_cells(EURO_DEPTH_LONG, EURO_WIDTH_LONG)
+        x = self.block_industry_pairs(occ,items,placed,n_ind,ind_heavy) if n_ind>0 else self.x_off
+        dxL,_ = self.span_cells(EURO_DEPTH_LONG,  EURO_WIDTH_LONG)
         dxQ,_ = self.span_cells(EURO_DEPTH_CROSS, EURO_WIDTH_CROSS)
 
-        def seed_cross(count):
+        def seed_cross(cnt):
             nonlocal x, n_euro
-            if count<=0: return
-            c = self.place_euro_column(occ,items,placed,x,count,"cross",euro_kg)
+            if cnt<=0: return
+            c = self._euro_column(occ,items,placed,x,cnt,"cross",euro_kg)
             if c>0:
                 n_euro -= c
                 x += dxQ
 
         if n_euro==24:
-            # 8 volle Längs-Spalten
-            x, n_euro = self.fill_euro_full(occ,items,placed,x,n_euro,"long",euro_kg)
-            name="Recipe 24 = 8×(3 long)"
+            x, n_euro = self._fill_euro_full(occ,items,placed,x,n_euro,"long",euro_kg)
+            name="Preset 24H: 8×(3 long)"
         elif n_euro==23:
-            seed_cross(2)                       # 2 quer außen
-            x, n_euro = self.fill_euro_full(occ,items,placed,x,n_euro,"long",euro_kg)
-            name="Recipe 23 = 2 cross + 7×(3 long)"
+            seed_cross(2)
+            x, n_euro = self._fill_euro_full(occ,items,placed,x,n_euro,"long",euro_kg)
+            name="Preset 23H: 2 cross + 7×(3 long)"
         elif n_euro==22:
-            seed_cross(1)                       # 1 quer mittig
-            x, n_euro = self.fill_euro_full(occ,items,placed,x,n_euro,"long",euro_kg)
-            name="Recipe 22 = 1 cross + 7×(3 long)"
+            seed_cross(1)
+            x, n_euro = self._fill_euro_full(occ,items,placed,x,n_euro,"long",euro_kg)
+            name="Preset 22H: 1 cross + 7×(3 long)"
         elif n_euro==21:
-            x, n_euro = self.fill_euro_full(occ,items,placed,x,n_euro,"long",euro_kg)
-            name="Recipe 21 = 7×(3 long)"
+            x, n_euro = self._fill_euro_full(occ,items,placed,x,n_euro,"long",euro_kg)
+            name="Preset 21H: 7×(3 long)"
         else:
-            # generisches Rezept nach Restklasse
+            # fallback: generisch
             rem = n_euro % 3
             if rem==2: seed_cross(2)
             elif rem==1: seed_cross(1)
-            x, n_euro = self.fill_euro_full(occ,items,placed,x,n_euro,"long",euro_kg)
+            x, n_euro = self._fill_euro_full(occ,items,placed,x,n_euro,"long",euro_kg)
             while n_euro>0 and x<self.X:
-                c=self.tail_close_euro(occ,items,placed,x,n_euro,euro_kg)
+                c = self._tail_close_euro(occ,items,placed,x,n_euro,euro_kg)
                 if c<=0: break
-                n_euro-=c; x+=dxL
-            name=f"Recipe n%3={rem}"
-
+                n_euro -= c
+                x += dxL
+            name=f"Recipe heavy n%3={rem}"
         return (items, placed, name)
 
-    # ---- Metrics / Render ----
+    # ---------- Metrics / Render ----------
     def used_len_cm(self, items) -> int:
         if not items: return 0
         x_end = max(x+dx for (x,y,dx,dy,typ,ori,kg) in items)
         return int(x_end * self.cell_cm)
 
-    def estimate_balance(self, items):
+    def axle_balance(self, items):
         if not items: return 50,50
         total=0.0; front_moment=0.0
         for (x,y,dx,dy,typ,ori,kg) in items:
-            x_cm = self.front_buffer + x*self.cell_cm + (dx*self.cell_cm)/2
+            x_center_cm = self.front_buffer + x*self.cell_cm + (dx*self.cell_cm)/2
             eff = self.effective_length if self.effective_length>0 else TRAILER_L
-            pos = max(0.0, 1.0 - (x_cm - self.front_buffer)/max(1.0, eff))
+            pos = max(0.0, 1.0 - (x_center_cm - self.front_buffer)/max(1.0, eff))  # 1 … 0
             total += kg
             front_moment += kg*pos
         if total<=0: return 50,50
@@ -330,9 +344,9 @@ class PalFuchs:
     def render_html(self, items, flip=False):
         html = f"""
         <div style='display:grid;
-          grid-template-columns: repeat({self.X}, {self.cell_px}px);
-          grid-auto-rows: {self.cell_px}px;
-          gap:1px; background:#ddd; padding:6px; border:2px solid #333; width:fit-content;'>
+            grid-template-columns: repeat({self.X}, {self.cell_px}px);
+            grid-auto-rows: {self.cell_px}px;
+            gap:1px; background:#ddd; padding:6px; border:2px solid #333; width:fit-content;'>
         """
         # Buffers
         rear_cells = self._ceil_div(DEFAULT_REAR_BUFFER, self.cell_cm) if DEFAULT_REAR_BUFFER>0 else 0
@@ -349,97 +363,126 @@ class PalFuchs:
             if rear_cells>0:
                 html += f"<div style='grid-column:1/span {rear_cells}; grid-row:1/span {self.Y}; background:#f3f3f3; border:1px dashed #999;'></div>"
 
-        # items
+        # Items
         for (x,y,dx,dy,typ,ori,kg) in items:
             bg = "#e3f2fd" if (typ=="Euro" and ori=="long") else ("#e8f5e9" if typ=="Euro" else "#ffe0b2")
             col = (self.X-(x+dx)+1) if flip else (x+1)
             html += f"<div style='grid-column:{col}/span {dx}; grid-row:{y+1}/span {dy}; background:{bg}; border:1px solid #777;'></div>"
+
         html += "</div>"
         return html
 
 # ---------- STREAMLIT UI ----------
-st.set_page_config(page_title="🦊 Pal Fuchs – Varianten & Achslast", layout="wide")
-st.title("🦊 Pal Fuchs – Varianten & Gewichtsmodus")
+st.set_page_config(page_title="🦊 Pal Fuchs – Varianten & Presets", layout="wide")
+st.title("🦊 Pal Fuchs – Varianten, Presets & Gewichtsmodus")
 
 with st.sidebar:
     st.markdown("### ⚙️ Anzeige")
-    cell_cm  = st.slider("Raster (cm/Zelle)", 20, 50, DEFAULT_CELL_CM, 5, key="cfg_cell_cm")
-    autozoom = st.checkbox("Auto‑Zoom auf konstante Breite", DEFAULT_AUTO_ZOOM, key="cfg_auto_zoom")
-    cell_px  = st.slider("Zell‑Pixel", 4, 20, DEFAULT_CELL_PX, 1, disabled=autozoom, key="cfg_cell_px")
+    cell_cm   = st.slider("Raster (cm/Zelle)", 20, 50, DEFAULT_CELL_CM, 5, key="cfg_cell_cm")
+    autozoom  = st.checkbox("Auto‑Zoom auf konstante Breite", DEFAULT_AUTO_ZOOM, key="cfg_auto_zoom")
+    cell_px   = st.slider("Zell‑Pixel", 4, 20, DEFAULT_CELL_PX, 1, disabled=autozoom, key="cfg_cell_px")
 
     st.markdown("---")
-    st.markdown("### 🚛 Kühlsattel (Standard)")
-    st.info(f"Front-Puffer: {DEFAULT_FRONT_BUFFER} cm\nHeck-Puffer: {DEFAULT_REAR_BUFFER} cm")
+    st.markdown("### 🚛 Kühlsattel (fix)")
+    st.info(f"Front‑Puffer: {DEFAULT_FRONT_BUFFER} cm\nHeck‑Puffer: {DEFAULT_REAR_BUFFER} cm")
 
     st.markdown("---")
-    st.markdown("### 📦 Euro Gewicht")
-    st.radio("Euro weight", ["normal","heavy"], index=1, key="cfg_euro_w")  # default heavy
+    st.markdown("### 📦 Umschalt‑Buttons")
+    # Euro weight toggle (normal/heavy)
+    if "euro_heavy" not in st.session_state: st.session_state.euro_heavy = True
+    if st.button(("Euro: HEAVY (400kg) – umschalten" if st.session_state.euro_heavy else "Euro: normal (250kg) – umschalten")):
+        st.session_state.euro_heavy = not st.session_state.euro_heavy
+
+    # Industrie weight toggle (Option B)
+    if "ind_heavy" not in st.session_state: st.session_state.ind_heavy = False
+    if st.button(("Industrie: SCHWER/IBC (1100kg) – umschalten" if st.session_state.ind_heavy else "Industrie: leicht (600kg) – umschalten")):
+        st.session_state.ind_heavy = not st.session_state.ind_heavy
 
     st.markdown("---")
-    weight_mode = st.checkbox("⚖️ Gewichtsmodus aktivieren (sort by axle balance)", False, key="cfg_weight")
+    weight_mode = st.checkbox("⚖️ Gewichtsmodus (nach Achslast sortieren)", False, key="cfg_weight")
     flip_view   = st.checkbox("Ansicht spiegeln (Front rechts)", False, key="cfg_flip")
 
-# init core
+# Core
 fuchs = PalFuchs(cell_cm=cell_cm, cell_px=cell_px, auto_zoom=autozoom,
                  front_buffer=DEFAULT_FRONT_BUFFER, rear_buffer=DEFAULT_REAR_BUFFER)
+euro_kg = EURO_HEAVY_KG if st.session_state.euro_heavy else EURO_NORMAL_KG
 
-euro_kg = EURO_HEAVY_KG if st.session_state.get("cfg_euro_w","heavy")=="heavy" else EURO_NORMAL_KG
-
-# Eingaben
+# Inputs
 st.markdown("### Eingaben")
-c1,c2,c3,c4 = st.columns([1.1,1.1,1.1,1.4])
-with c1: n_euro = st.number_input("Euro (120×80)", 0, 45, 24, key="n_euro")
-with c2: n_indL = st.number_input("Industrie leicht", 0, 30, 0, key="n_industrie_light")
-with c3: n_ibc  = st.number_input("IBC schwer", 0, 30, 0, key="n_industrie_heavy")
+c1,c2,c3 = st.columns([1.2,1.2,1.6])
+with c1:
+    if "n_euro" not in st.session_state: st.session_state.n_euro = 24
+    n_euro = st.number_input("Euro (120×80)", 0, 45, st.session_state.n_euro, key="n_euro_in")
+    # Sync back
+    st.session_state.n_euro = int(n_euro)
 
-with c4:
-    st.caption("Heavy‑Presets")
+with c2:
+    if "n_ind" not in st.session_state: st.session_state.n_ind = 0
+    n_ind = st.number_input("Industrie (100×120) – Gesamt", 0, 30, st.session_state.n_ind, key="n_ind_in")
+    st.session_state.n_ind = int(n_ind)
+
+with c3:
+    st.caption("Heavy‑Presets (Euro)")
     b21,b22,b23,b24 = st.columns(4)
     with b21:
-        if st.button("21H"): st.session_state.n_euro=21; st.session_state.cfg_euro_w="heavy"
+        if st.button("21H"):
+            st.session_state.n_euro = 21
+            st.session_state.euro_heavy = True
     with b22:
-        if st.button("22H"): st.session_state.n_euro=22; st.session_state.cfg_euro_w="heavy"
+        if st.button("22H"):
+            st.session_state.n_euro = 22
+            st.session_state.euro_heavy = True
     with b23:
-        if st.button("23H"): st.session_state.n_euro=23; st.session_state.cfg_euro_w="heavy"
+        if st.button("23H"):
+            st.session_state.n_euro = 23
+            st.session_state.euro_heavy = True
     with b24:
-        if st.button("24H"): st.session_state.n_euro=24; st.session_state.cfg_euro_w="heavy"
+        if st.button("24H"):
+            st.session_state.n_euro = 24
+            st.session_state.euro_heavy = True
 
-# Varianten + Rezepte
-variants = fuchs.generate_variants(int(st.session_state.n_euro),
-                                   int(st.session_state.n_industrie_light),
-                                   int(st.session_state.n_industrie_heavy),
-                                   euro_kg)
+# Build variants
+variants = fuchs.variants(int(st.session_state.n_euro),
+                          euro_kg,
+                          int(st.session_state.n_ind),
+                          bool(st.session_state.ind_heavy))
 
-# deterministisches Front‑Rezept zusätzlich (immer heavy‑kompatibel)
-recipe = fuchs.recipe_front(int(st.session_state.n_euro),
-                            int(st.session_state.n_industrie_light),
-                            int(st.session_state.n_industrie_heavy),
-                            euro_kg)
-variants.append(recipe)  # (items, placed, name)
+# Deterministic heavy recipe for 21–24 (wenn Euro auf heavy steht)
+if st.session_state.euro_heavy and st.session_state.n_euro in (21,22,23,24):
+    variants.append(
+        fuchs.recipe_heavy_21_24(
+            int(st.session_state.n_euro),
+            int(st.session_state.n_ind),
+            bool(st.session_state.ind_heavy),
+            euro_kg
+        )
+    )
 
-# Sortierung nach Achslast wenn gewünscht
-if weight_mode:
+# Sort by axle balance if requested
+if weight_mode and variants:
     def score(v):
         items,_,_ = v
-        f,r = fuchs.estimate_balance(items)
+        f,r = fuchs.axle_balance(items)
         return abs(f-50)
     variants.sort(key=score)
 
 # Navigation
-if "v_idx" not in st.session_state: st.session_state.v_idx=0
+if "v_idx" not in st.session_state: st.session_state.v_idx = 0
 nav1,nav2 = st.columns(2)
 with nav1:
     if st.button("◀ Vorherige Variante", use_container_width=True):
-        st.session_state.v_idx = (st.session_state.v_idx-1) % len(variants)
+        st.session_state.v_idx = (st.session_state.v_idx - 1) % len(variants)
 with nav2:
     if st.button("Nächste Variante ▶", use_container_width=True):
-        st.session_state.v_idx = (st.session_state.v_idx+1) % len(variants)
+        st.session_state.v_idx = (st.session_state.v_idx + 1) % len(variants)
 
+# Show
 items, placed, name = variants[st.session_state.v_idx]
+wlbl = "HEAVY 400kg" if st.session_state.euro_heavy else "normal 250kg"
+ilbl = "IBC SCHWER" if st.session_state.ind_heavy else "Industrie leicht"
 st.markdown(f"**Variante:** {st.session_state.v_idx+1} / {len(variants)} – {name} "
-            f"[{st.session_state.get('cfg_euro_w','heavy')} Euro: {euro_kg} kg]")
+            f"[Euro {wlbl} • Industrie: {ilbl}]")
 
-# Render
 board_html = fuchs.render_html(items, flip_view)
 height_px  = min(680, max(240, (fuchs.cell_px+1)*fuchs.Y + 28))
 st.components.v1.html(board_html, height=height_px, scrolling=False)
@@ -447,15 +490,16 @@ st.components.v1.html(board_html, height=height_px, scrolling=False)
 # Status
 used_cm = fuchs.used_len_cm(items)
 st.markdown(f"**Genutzte Länge:** {used_cm} cm von {TRAILER_L} cm (≈ {used_cm/TRAILER_L:.0%})")
-f_pct, r_pct = fuchs.estimate_balance(items)
+f_pct, r_pct = fuchs.axle_balance(items)
 st.markdown(f"**Achslast‑Schätzung:** vorne {f_pct}% / hinten {r_pct}%")
-st.markdown(f"**Effektive Länge:** {fuchs.effective_length} cm (mit Kühlsattel‑Puffern)")
+st.markdown(f"**Effektive Länge:** {fuchs.effective_length} cm (Kühlsattel‑Puffer berücksichtigt)")
 
 with st.expander("🔎 Legende / Hinweise"):
     st.markdown(
         "- **Farben:** Euro längs = hellblau, Euro quer = hellgrün, Industrie/IBC = orange\n"
-        "- **Presets:** Buttons 21H/22H/23H/24H setzen schwere Euro & passendes Rezept.\n"
-        "- **Remainder‑Logik:** Quer zuerst (Mitte bzw. außen), dann 3er‑Längsspalten, kein einzelner Längs‑Euro am Start.\n"
-        "- **Industrie/IBC:** Immer paarweise pro Spalte (oben+unten). Einzelne schwere Paletten landen hinten (BOTTOM).\n"
-        "- Achslast ist eine vereinfachte Schätzung – zur Orientierung."
+        "- **Umschalter:** Buttons in der Sidebar ändern das Gewicht (Euro & Industrie/IBC)\n"
+        "- **Presets:** 21H/22H/23H/24H setzen schwere Euro und laden das feste Muster\n"
+        "- **Industrie‑Platzierung (Option B):** ein Zähler, paarweise pro Spalte (oben+unten), Rest 1 → unten\n"
+        "- **Remainder:** Quer zuerst (1 mittig / 2 außen), dann 3er‑Längsspalten; kein einzelner langer Euro vorne\n"
+        "- Achslast‑Schätzung ist vereinfacht (Richtwert)"
     )
