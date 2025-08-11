@@ -1,6 +1,7 @@
 # app.py
 # Paletten Fuchs – Clean + Grafik + Gewichtsmodi (Block vorne/hinten, Verteilen-Hecklast)
 # – Tabs-Fix (eindeutige Keys) – Inline 2×2 optional
+# – NEU: Buttons für Einzel-quer (1/2 vorne, mittig, 1/2 hinten + "Alle aktivieren")
 
 from typing import List, Dict, Optional, Tuple, Set
 import streamlit as st
@@ -40,7 +41,7 @@ def cap_to_trailer(rows: List[Dict]) -> List[Dict]:
         s += L
     return out
 
-# --- Euro-Layout (ohne Gewichtsumordnung) ---
+# --- Euro-Layout (Standard ohne Buttons – bleibt für evtl. Fallbacks) ---
 def layout_for_preset_euro(n: int, singles_front: int = 0) -> List[Dict]:
     rows: List[Dict] = []
     remaining = n
@@ -75,6 +76,78 @@ def layout_for_preset_euro(n: int, singles_front: int = 0) -> List[Dict]:
             rest = n % 3
             if rest == 2: rows.insert(0, euro_row_trans2())
             elif rest == 1: rows.insert(0, euro_row_trans1())
+
+    return rows
+
+# --- NEU: Euro-Layout mit Buttons (1/2 vorne, mittig, 1/2 hinten) ---
+def layout_for_preset_euro_buttons(
+    n: int,
+    front1: bool = False,
+    front2: bool = False,
+    mid1: bool = False,
+    rear1: bool = False,
+    rear2: bool = False
+) -> List[Dict]:
+    """
+    Baut Euro-Reihen mit optionalen Einzel-quer an:
+    - vorne: 0/1/2 (front1/front2; wenn beide True → 2)
+    - mittig: 0/1
+    - hinten: 0/1/2 (rear1/rear2; wenn beide True → 2)
+    Danach: wenn möglich eine 2-quer-Reihe und sonst 3-längs. Abschluss wie gehabt.
+    """
+    rows: List[Dict] = []
+    remaining = n
+
+    singles_front = 2 if front2 else (1 if front1 else 0)
+    singles_mid   = 1 if mid1 else 0
+    singles_rear  = 2 if rear2 else (1 if rear1 else 0)
+    singles_total = singles_front + singles_mid + singles_rear
+    if singles_total > remaining:
+        # zu viele Singles angehakt → von hinten kürzen
+        cut = singles_total - remaining
+        singles_rear = max(0, singles_rear - cut)
+        singles_total = singles_front + singles_mid + singles_rear
+
+    # --- 1) vorne: Einzel-quer
+    take = min(singles_front, remaining)
+    for _ in range(take):
+        rows.append(euro_row_trans1())
+    remaining -= take
+
+    # Rest, der noch für 2-quer/3-längs verfügbar ist (mittig+ hinten reservieren)
+    reserve_after = singles_mid + singles_rear
+    usable_for_fill = max(0, remaining - reserve_after)
+
+    # --- 2) 2-quer einbauen, wenn es danach durch 3 teilbar ist
+    if usable_for_fill >= 2 and (usable_for_fill - 2) % 3 == 0:
+        rows.append(euro_row_trans2())
+        remaining -= 2
+        usable_for_fill -= 2
+
+    # --- 3) 3-längs auffüllen, aber Platz für mittig/hinten reservieren
+    take3 = usable_for_fill // 3
+    rows += [euro_row_long() for _ in range(take3)]
+    remaining -= take3 * 3
+
+    # --- 4) mittig einen Einzel-quer einfügen (falls gewünscht/reserviert)
+    if singles_mid and remaining > 0:
+        mid_idx = max(0, min(len(rows), len(rows)//2))
+        rows.insert(mid_idx, euro_row_trans1())
+        remaining -= 1
+
+    # --- 5) hinten 1–2 Einzel-quer
+    take_rear = min(singles_rear, remaining)
+    for _ in range(take_rear):
+        rows.append(euro_row_trans1())
+        remaining -= 1
+
+    # --- 6) Absicherung: falls wegen Rundungen noch etwas übrig ist, versuche sauber zu machen
+    if remaining > 0:
+        if remaining == 2:
+            rows.insert(0, euro_row_trans2())
+        else:
+            # Fallback: klassisches Schema
+            rows = layout_for_preset_euro(n, singles_front=0)
 
     return rows
 
@@ -340,6 +413,9 @@ def draw_graph(title: str,
             heavy_ind_count=heavy_ind_count, heavy_ind_side=heavy_side
         )
 
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
     fig, ax = plt.subplots(figsize=figsize)
     ax.add_patch(Rectangle((0, 0), TRAILER_LEN_CM, TRAILER_W_CM,
                            fill=False, linewidth=2, edgecolor="#333"))
@@ -353,7 +429,7 @@ def draw_graph(title: str,
 
     ax.set_xlim(0, TRAILER_LEN_CM); ax.set_ylim(0, TRAILER_W_CM)
     ax.set_aspect('equal'); ax.axis('off'); ax.set_title(title, fontsize=12, pad=6)
-    st.pyplot(fig); import matplotlib.pyplot as _plt; _plt.close(fig)
+    st.pyplot(fig); plt.close(fig)
 
     if weight_mode and (kg_euro or kg_ind):
         total = euro_cnt * kg_euro + ind_cnt * kg_ind
@@ -374,7 +450,25 @@ c1, c2, c3 = st.columns(3)
 with c1:
     euro_n = st.number_input("Euro-Paletten", 0, 40, 33, step=1)
 with c2:
-    singles_front = st.slider("Einzel-quer vorne (0/1/2)", 0, 2, 0)
+    st.markdown("**Einzel-quer platzieren**")
+    colbA, colbB = st.columns(2)
+    with colbA:
+        btn_front1 = st.toggle("1 vorne", value=False)
+        btn_mid1   = st.toggle("mittig quer", value=False)
+        btn_rear1  = st.toggle("1 hinten", value=False)
+    with colbB:
+        btn_front2 = st.toggle("2 vorne", value=False)
+        btn_all    = st.toggle("Alle aktivieren", value=False,
+                               help="Aktiviert 2 vorne, mittig und 2 hinten.")
+        btn_rear2  = st.toggle("2 hinten", value=False)
+
+    # 'Alle' schaltet ein sinnvolles Vollmuster
+    if btn_all:
+        btn_front1 = False
+        btn_front2 = True
+        btn_mid1   = True
+        btn_rear1  = False
+        btn_rear2  = True
 with c3:
     ind_n = st.number_input("Industrie-Paletten", 0, 40, 0, step=1)
 
@@ -412,10 +506,15 @@ with st.expander("Gewicht & Modus (optional)", expanded=False):
         heavy_total = st.number_input("Gesamtanzahl schwere Paletten", 0, 200, 20, step=1,
                                       help="Euro + Industrie zusammen; werden hecklastig verteilt.")
 
-# 1) Reihen bauen (ohne Umordnung)
+# 1) Reihen bauen (mit Buttons-Layout)
 rows_clean: List[Dict] = []
 if euro_n > 0:
-    rows_clean += layout_for_preset_euro(euro_n, singles_front=singles_front)
+    rows_clean += layout_for_preset_euro_buttons(
+        euro_n,
+        front1=btn_front1, front2=btn_front2,
+        mid1=btn_mid1,
+        rear1=btn_rear1, rear2=btn_rear2
+    )
 if ind_n > 0:
     rows_clean += layout_for_preset_industry(ind_n)
 
@@ -429,7 +528,6 @@ if weight_mode:
         rows_clean = reorder_rows_heavy(rows_clean, hvy_e, hvy_i, side="rear",
                                         group_by_type=group_block, type_order=type_order)
     elif mode == "Verteilen (Hecklast)":
-        # Alle schwer? -> markiere alle Reihen; sonst hecklastig auswählen
         total_pal = sum(r.get("pallets",0) for r in rows_clean)
         qty = min(heavy_total, total_pal)
         if qty >= total_pal:
@@ -438,7 +536,7 @@ if weight_mode:
             heavy_rows = pick_heavy_rows_rear_biased(rows_clean, qty)
 
 # 3) Zeichnen
-title = f"Clean: {euro_n} Euro (S{singles_front}) + {ind_n} Industrie"
+title = f"Clean: {euro_n} Euro (Buttons) + {ind_n} Industrie"
 draw_graph(
     title,
     rows_clean,
@@ -461,7 +559,7 @@ def inline_four_variants_grid():
         with c[0]:
             e = st.number_input(f"Euro V{idx}", 0, 40, 0 if idx>1 else 33, step=1, key=f"iv_e{idx}")
         with c[1]:
-            s = st.slider(f"Einzel V{idx}", 0, 2, 0, key=f"iv_s{idx}")
+            s = st.slider(f"Einzel V{idx}", 0, 2, 0, key=f"iv_s{idx}")  # (Optional: auf Buttons umrüstbar)
         with c[2]:
             i = st.number_input(f"Industrie V{idx}", 0, 40, 0, step=1, key=f"iv_i{idx}")
 
@@ -490,7 +588,7 @@ def inline_four_variants_grid():
 
         # Reihen
         r: List[Dict] = []
-        if e > 0: r += layout_for_preset_euro(e, singles_front=s)
+        if e > 0: r += layout_for_preset_euro(e, singles_front=s)  # (Optional: Buttons-Variante)
         if i > 0: r += layout_for_preset_industry(i)
 
         # Gewichtslogik
@@ -591,7 +689,7 @@ def tab_ui(tab, idx: int, label: str, defaults=(33,0,0)):
 
         # Reihen
         r: List[Dict] = []
-        if e > 0: r += layout_for_preset_euro(e, singles_front=s)
+        if e > 0: r += layout_for_preset_euro(e, singles_front=s)  # (Tabs lassen wir vorerst beim Slider)
         if i > 0: r += layout_for_preset_industry(i)
 
         # Gewichtslogik
@@ -620,4 +718,5 @@ if SHOW_TABS:
     compare_tabs_four_variants()
 
 st.caption("Grafik 1360×240 cm. Grün=Euro längs (120×80), Blau=Euro quer (80×120), Orange=Industrie (120×100). "
-           "Modi: Block vorne/hinten oder Verteilen (Hecklast) mit Gesamt‑Schwerzahl (Euro+Industrie).")
+           "Modi: Block vorne/hinten oder Verteilen (Hecklast) mit Gesamt‑Schwerzahl (Euro+Industrie). "
+           "Einzel‑quer jetzt per Buttons: 1/2 vorne, mittig, 1/2 hinten.")
