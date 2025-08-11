@@ -2,7 +2,8 @@
 # Paletten Fuchs – Clean + Grafik + Gewichtsmodi (Block vorne/hinten, Verteilen-Hecklast)
 # – Tabs-Fix (eindeutige Keys) – Inline 2×2 optional
 # – Buttons für Einzel-quer (1/2 vorne, mittig, 1/2 hinten + "Alle aktivieren")
-# – NEU: Letzte 4 Reihen niemals Einzel-quer; letzte Reihe immer voll (Abschluss). Buttons werden ignoriert, wenn nötig.
+# – Tail-Regel: Letzte 4 Reihen niemals Einzel-quer; letzte Reihe immer voll
+# – NEU: "Exakt bis hinten (Euro)" – füllt exakt 1360 cm (Heck 0 cm), keine Singles im Tail
 
 from typing import List, Dict, Optional, Tuple, Set
 import streamlit as st
@@ -51,13 +52,13 @@ def rows_pallets(rows: List[Dict]) -> int:
 # ------------------ Helfer: Abschluss erzwingen (keine Singles in den letzten 4 Reihen) ------------------
 def enforce_tail_no_single(rows: List[Dict], target_pal: int) -> List[Dict]:
     """
-    Entfernt EURO_1_TRANS in den letzten 4 Reihen und versucht, die Paletteanzahl sauber aufzufüllen.
+    Entfernt EURO_1_TRANS in den letzten 4 Reihen und versucht, die Palettenanzahl sauber aufzufüllen.
     - Letzte Reihe immer voll (EURO_3_LONG oder EURO_2_TRANS)
     - Trailerlänge darf nicht überschritten werden
     - Falls nicht sauber möglich: Fallback auf klassisches, stabiles Schema
     """
-    rows = list(rows)  # Kopie
-    rows = cap_to_trailer(rows)  # Sicherstellen, dass wir innerhalb des Trailers sind
+    rows = list(rows)
+    rows = cap_to_trailer(rows)
 
     # 1) Singles in den letzten 4 Reihen entfernen
     n = len(rows)
@@ -66,25 +67,22 @@ def enforce_tail_no_single(rows: List[Dict], target_pal: int) -> List[Dict]:
         cleaned = []
         for i, r in enumerate(rows):
             if i >= tail_start and r["type"] == "EURO_1_TRANS":
-                # ignoriere Single im Tail (Button wird sozusagen übersteuert)
-                continue
+                continue  # Single im Tail wird ignoriert
             cleaned.append(r)
         rows = cleaned
 
-    # 2) Falls letzte Reihe Single (kann nach 1) eigentlich nicht mehr vorkommen) → entfernen
+    # 2) Falls letzte Reihe Single (sollte nach 1) nicht mehr passieren)
     if rows and rows[-1]["type"] == "EURO_1_TRANS":
         rows.pop()
 
     # 3) Paletten-Differenz auffüllen (ohne Trailer zu sprengen)
     deficit = target_pal - rows_pallets(rows)
     if deficit <= 0:
-        # ggf. zu viele Paletten? Dann Fallback auf klassisches Schema
         if deficit < 0:
             base = layout_for_preset_euro_stable(target_pal, singles_front=0)
             return cap_to_trailer(base)
         return rows
 
-    # Wir fügen vor dem Tail (vor den letzten max. 4 Reihen) auf
     insert_limit = max(0, len(rows) - 4)
 
     def try_insert_row(row_factory, at_idx: int) -> bool:
@@ -94,10 +92,9 @@ def enforce_tail_no_single(rows: List[Dict], target_pal: int) -> List[Dict]:
             return True
         return False
 
-    # zuerst: wenn deficit % 3 == 2 → versuche eine 2-quer einzubauen
+    # Falls 2 Paletten fehlen → 2-quer versuchen
     if deficit % 3 == 2:
         placed = False
-        # probiere von vorne bis kurz vor Tail
         for ins in range(0, insert_limit + 1):
             if try_insert_row(euro_row_trans2, ins):
                 deficit -= 2
@@ -107,28 +104,25 @@ def enforce_tail_no_single(rows: List[Dict], target_pal: int) -> List[Dict]:
             rows.append(euro_row_trans2())
             deficit -= 2
 
-    # dann so viele 3-längs wie möglich
+    # Dann 3-längs auffüllen, bevorzugt vor dem Tail
     while deficit >= 3 and rows_length_cm(rows) + EURO_L_CM <= TRAILER_LEN_CM:
-        # bevorzugt kurz vor dem Tail, damit der Abschluss hinten unberührt bleibt
         ins = insert_limit
         rows = rows[:ins] + [euro_row_long()] + rows[ins:]
         deficit -= 3
 
-    # Wenn noch Rest übrig (1 oder 2) -> letzter Versuch 2-quer am Anfang
+    # Letzter Versuch: 2-quer ganz vorne
     if deficit == 2 and rows_length_cm(rows) + EURO_W_CM <= TRAILER_LEN_CM:
         rows = [euro_row_trans2()] + rows
         deficit -= 2
 
-    # Sollte immer noch etwas fehlen → Fallback
     if deficit != 0:
         base = layout_for_preset_euro_stable(target_pal, singles_front=0)
         rows = cap_to_trailer(base)
 
-    # 4) Finale Sicherung: keine Singles in den letzten 4
+    # 4) Finale Sicherung: keine Singles im Tail
     n = len(rows)
     tail_start = max(0, n - 4)
     if any(r["type"] == "EURO_1_TRANS" for r in rows[tail_start:]):
-        # Falls das passiert, fallbacken wir konsequent
         base = layout_for_preset_euro_stable(target_pal, singles_front=0)
         rows = cap_to_trailer(base)
 
@@ -171,7 +165,6 @@ def layout_for_preset_euro_stable(n: int, singles_front: int = 0) -> List[Dict]:
             if rest == 2: rows.insert(0, euro_row_trans2())
             elif rest == 1: rows.insert(0, euro_row_trans1())
 
-    # Abschlussregel anwenden
     return enforce_tail_no_single(rows, n)
 
 # (Buttons-Variante – nutzt am Ende enforce_tail_no_single)
@@ -192,7 +185,6 @@ def layout_for_preset_euro_buttons(
     singles_total = singles_front + singles_mid + singles_rear
     if singles_total > remaining:
         cut = singles_total - remaining
-        # von hinten kürzen
         singles_rear = max(0, singles_rear - cut)
         singles_total = singles_front + singles_mid + singles_rear
 
@@ -223,7 +215,7 @@ def layout_for_preset_euro_buttons(
         rows.insert(mid_idx, euro_row_trans1())
         remaining -= 1
 
-    # 5) hinten Singles (vorerst – werden ggf. später entfernt wegen Abschlussregel)
+    # 5) hinten Singles (werden ggf. später entfernt wegen Abschlussregel)
     take_rear = min(singles_rear, remaining)
     for _ in range(take_rear):
         rows.append(euro_row_trans1())
@@ -234,11 +226,64 @@ def layout_for_preset_euro_buttons(
         rows = [euro_row_trans2()] + rows
         remaining = 0
     elif remaining > 0:
-        # als Fallback klassisch
         return layout_for_preset_euro_stable(n, singles_front=0)
 
-    # 7) Abschlussregel: keine Singles in den letzten 4 + letzte Reihe voll
+    # 7) Abschlussregel
     return enforce_tail_no_single(rows, n)
+
+# --- NEU: Euro exakt bis hinten (Heck 0 cm, keine Singles im Tail, letzte Reihe voll)
+def build_euro_exact_tail(n: int) -> List[Dict]:
+    """
+    Baut Euro so, dass die Gesamtlänge exakt 1360 cm ist (Heck 0 cm),
+    keine Singles (EURO_1_TRANS) in den letzten 4 Reihen und letzte Reihe voll.
+    Idee:
+      - s = 34 - n => minimal nötige 1-quer-Anzahl (theoretisch)
+      - Finde a,k >= 0 mit 3a + 2k = n - s und a gerade
+      - Reihen: (ein paar Singles vorne), dann a×3-längs, k×2-quer am Heck,
+        restliche Singles vor die letzten 4 Reihen streuen.
+    """
+    if n <= 0:
+        return []
+
+    s = max(0, 34 - n)      # minimale 1-quer-Menge
+    rem = n - s             # 3a + 2k = rem
+    a_max = rem // 3
+    if a_max % 2 == 1:
+        a_max -= 1
+
+    a = -1
+    for cand in range(a_max, -1, -2):   # nur gerade a
+        if (rem - 3*cand) % 2 == 0:
+            a = cand
+            break
+    if a < 0:
+        return layout_for_preset_euro_stable(n, singles_front=0)
+
+    k = (rem - 3*a) // 2  # 2-quer Anzahl
+
+    rows: List[Dict] = []
+
+    # Singles vorne: die Hälfte (abrunden)
+    s_front = s // 2
+    s_tailguard = s - s_front
+    for _ in range(s_front):
+        rows.append(euro_row_trans1())
+
+    # Längsblöcke
+    rows += [euro_row_long() for _ in range(a)]
+
+    # 2-quer am Heck
+    rows += [euro_row_trans2() for _ in range(k)]
+
+    # Restliche Singles direkt vor die letzten 4 Reihen
+    if s_tailguard > 0:
+        insert_at = max(0, len(rows) - 4)
+        singles = [euro_row_trans1() for _ in range(s_tailguard)]
+        rows = rows[:insert_at] + singles + rows[insert_at:]
+
+    # Absicherung
+    rows = enforce_tail_no_single(rows, n)
+    return rows
 
 # ------------------ Industrie-Layout (ohne Gewichtsumordnung) ------------------
 def layout_for_preset_industry(n: int) -> List[Dict]:
@@ -519,14 +564,18 @@ with c2:
     with colbB:
         btn_front2 = st.toggle("2 vorne", value=False)
         btn_all    = st.toggle("Alle aktivieren", value=False,
-                               help="Aktiviert 2 vorne, mittig und 2 hinten. Heck-Tail bleibt immer voll.")
+                               help="Aktiviert 2 vorne, mittig und 2 hinten. Heck bleibt immer voll.")
         btn_rear2  = st.toggle("2 hinten", value=False)
+
     if btn_all:
         btn_front1 = False
         btn_front2 = True
         btn_mid1   = True
         btn_rear1  = False
         btn_rear2  = True
+
+    exact_tail = st.toggle("Exakt bis hinten (Euro)", value=False,
+                           help="Euro füllt exakt 1360 cm (Heck 0 cm), keine 1‑quer im Heck (letzte 4 Reihen), letzte Reihe voll.")
 with c3:
     ind_n = st.number_input("Industrie-Paletten", 0, 40, 0, step=1)
 
@@ -562,15 +611,18 @@ with st.expander("Gewicht & Modus (optional)", expanded=False):
         heavy_total = st.number_input("Gesamtanzahl schwere Paletten", 0, 200, 20, step=1,
                                       help="Euro + Industrie zusammen; werden hecklastig verteilt.")
 
-# 1) Reihen bauen (mit Buttons) + Abschlussregel
+# 1) Reihen bauen (Euro je nach Schalter) + Abschlussregel
 rows_clean: List[Dict] = []
 if euro_n > 0:
-    rows_clean += layout_for_preset_euro_buttons(
-        euro_n,
-        front1=btn_front1, front2=btn_front2,
-        mid1=btn_mid1,
-        rear1=btn_rear1, rear2=btn_rear2
-    )
+    if exact_tail:
+        rows_clean += build_euro_exact_tail(euro_n)
+    else:
+        rows_clean += layout_for_preset_euro_buttons(
+            euro_n,
+            front1=btn_front1, front2=btn_front2,
+            mid1=btn_mid1,
+            rear1=btn_rear1, rear2=btn_rear2
+        )
 if ind_n > 0:
     rows_clean += layout_for_preset_industry(ind_n)
 
@@ -592,7 +644,7 @@ if weight_mode:
             heavy_rows = pick_heavy_rows_rear_biased(rows_clean, qty)
 
 # 3) Zeichnen
-title = f"Clean: {euro_n} Euro (Buttons) + {ind_n} Industrie"
+title = f"Clean: {euro_n} Euro ({'exakt bis hinten' if exact_tail else 'Buttons'}) + {ind_n} Industrie"
 draw_graph(
     title,
     rows_clean,
@@ -771,4 +823,4 @@ if SHOW_TABS:
 
 st.caption("Grafik 1360×240 cm. Grün=Euro längs (120×80), Blau=Euro quer (80×120), Orange=Industrie (120×100). "
            "Tail-Regel: In den letzten 4 Reihen keine Einzel-quer; letzte Reihe immer voll. "
-           "Modi: Block vorne/hinten oder Verteilen (Hecklast).")
+           "„Exakt bis hinten (Euro)“ füllt 1360 cm ohne Heck-Luft.")
