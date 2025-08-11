@@ -1,10 +1,12 @@
-# app.py — Paletten Fuchs 9.4
+# app.py — Paletten Fuchs 9.4 (erweitert)
 # - Clean-Ansicht (Euro/Industrie + "Exakt bis hinten")
 # - Varianten (2×2) IMMER sichtbar, gekoppelt an die Eingaben oben
 # - JSON-Konfig: variants.json upload (beliebig viele Muster), Default-Konfig als Fallback
+# - Neue Variantentypen: recipe, heavy_auto_rear, light_auto_mix
+# - JSON-Filter: n_exact, n_min, n_max, weight_required, weight_forbidden
 # - Gewicht: Block vorne/hinten, Verteilen (Hecklast)
 # - BONUS: Bei aktivem Gewicht zusätzliches 2×2 mit Gewichts-Logik
-# - Achslast-Schätzung (grob): Front/Rear basierend auf Hebelmodell (Stützen an x=0 und x=1360)
+# - Achslast-Schätzung (grob): Front/Rear basierend auf Hebelmodell (Stützen an den Enden des 1360-cm-Rahmens)
 
 from typing import List, Dict, Optional, Tuple, Set
 import streamlit as st
@@ -114,7 +116,7 @@ def enforce_tail_no_single(rows: List[Dict], target_pal: int) -> List[Dict]:
         rows = cap_to_trailer(layout_for_preset_euro_stable(target_pal, singles_front=0))
     return rows
 
-# ------------------ Euro-Layouts ------------------
+# ------------------ Euro-Layouts (stabil & exakt) ------------------
 def layout_for_preset_euro_stable(n: int, singles_front: int = 0) -> List[Dict]:
     rows: List[Dict] = []; remaining = n
     take = min(max(0, singles_front), 2, remaining)
@@ -142,7 +144,6 @@ def layout_for_preset_euro_stable(n: int, singles_front: int = 0) -> List[Dict]:
 
     return enforce_tail_no_single(rows, n)
 
-# --- Euro exakt bis hinten ---
 def build_euro_exact_tail(n: int) -> List[Dict]:
     if n <= 0: return []
     s = max(0, 34 - n)   # minimale 1-quer
@@ -415,9 +416,6 @@ def draw_graph(title: str,
             heavy_ind_count=heavy_ind_count, heavy_ind_side=heavy_side
         )
 
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Rectangle
-
     fig, ax = plt.subplots(figsize=figsize)
     ax.add_patch(Rectangle((0, 0), TRAILER_LEN_CM, TRAILER_W_CM,
                            fill=False, linewidth=2, edgecolor="#333"))
@@ -433,7 +431,7 @@ def draw_graph(title: str,
     ax.set_aspect('equal'); ax.axis('off'); ax.set_title(title, fontsize=12, pad=6)
     st.pyplot(fig); plt.close(fig)
 
-    # Gesamtgewicht (wenn gewünscht) + Achslasten
+    # Gesamtgewicht + Achslasten
     if (weight_mode or show_axle_note) and (kg_euro or kg_ind):
         front, rear, total = estimate_axle_loads(rows, kg_euro, kg_ind)
         axl = caption_axle(front, rear, total)
@@ -447,7 +445,7 @@ def draw_graph(title: str,
         else:
             st.caption(axl)
 
-# ------------------ Vordefinierte Varianten (Euro) ------------------
+# ------------------ Vordefinierte Varianten (Euro) + neue Typen ------------------
 def _choose_k_for_no_single(n: int, k_max: int) -> int:
     k_cap = min(k_max, n // 2)
     want = (3 - (n % 3)) % 3  # k ≡ -n (mod 3)
@@ -494,6 +492,37 @@ def build_euro_alt_pattern(n: int, exact_tail: bool) -> List[Dict]:
     approx_block = max(1, n // 6)
     return build_euro_rear_2trans_block(n, approx_block=approx_block, exact_tail=False)
 
+# --- NEU: recipe / heavy_auto_rear / light_auto_mix ---
+def build_euro_recipe(rowspec: list) -> List[Dict]:
+    """rowspec: Liste 1/2/3 (1=1 quer, 2=2 quer, 3=3 längs), Front→Heck."""
+    rows: List[Dict] = []
+    for r in rowspec:
+        if r == 3: rows.append(euro_row_long())
+        elif r == 2: rows.append(euro_row_trans2())
+        elif r == 1: rows.append(euro_row_trans1())
+    return enforce_tail_no_single(rows, sum(rowspec))
+
+def build_euro_heavy_auto_rear(n: int, exact_tail: bool, params: dict) -> List[Dict]:
+    """Hecklastige schwere Auto-Variante: wählt einen sinnvollen 2×quer-Blockanteil für das Heck."""
+    if n <= 0: return []
+    if exact_tail: return build_euro_exact_tail(n)
+    target_share = float(params.get("target_rear_share", 0.42))
+    min_k = int(params.get("min_k", 3))
+    max_k = n // 2
+    k_guess = max(min_k, min(max_k, int(round(target_share * n / 2.0))))
+    k = _choose_k_for_no_single(n, k_max=k_guess)
+    if k == 0:
+        return build_euro_all_long(n, exact_tail=False)
+    long_cnt = (n - 2*k) // 3
+    rows = [euro_row_long() for _ in range(long_cnt)] + [euro_row_trans2() for _ in range(k)]
+    return enforce_tail_no_single(rows, n)
+
+def build_euro_light_auto_mix(n: int, exact_tail: bool, params: dict) -> List[Dict]:
+    """Leichte Mischung: periodische 2×quer dazwischenstreuen (period=3..6 typisch)."""
+    if n <= 0: return []
+    period = int(params.get("period", 4))
+    return build_euro_mixed_periodic(n, period=period, exact_tail=exact_tail)
+
 def combine_with_industry_pos(euro_rows: List[Dict], ind_n: int, pos: str) -> List[Dict]:
     if ind_n <= 0:
         return euro_rows
@@ -501,6 +530,12 @@ def combine_with_industry_pos(euro_rows: List[Dict], ind_n: int, pos: str) -> Li
     return cap_to_trailer(ind_rows + euro_rows) if pos == "front" else cap_to_trailer(euro_rows + ind_rows)
 
 def build_euro_by_type(t: str, n: int, exact_tail: bool, params: dict) -> List[Dict]:
+    if t == "recipe":
+        return build_euro_recipe(params.get("rows", []))
+    if t == "heavy_auto_rear":
+        return build_euro_heavy_auto_rear(n, exact_tail, params)
+    if t == "light_auto_mix":
+        return build_euro_light_auto_mix(n, exact_tail, params)
     if t == "all_long":
         return build_euro_all_long(n, exact_tail=exact_tail)
     if t == "rear_block":
@@ -514,12 +549,31 @@ def build_euro_by_type(t: str, n: int, exact_tail: bool, params: dict) -> List[D
     # Fallback
     return build_euro_all_long(n, exact_tail=exact_tail)
 
-def generate_variants_from_config(cfg: dict, euro_n: int, ind_n: int, exact_tail: bool):
-    """Erzeugt beliebig viele Varianten gemäß JSON-Config."""
+# ------------------ JSON-Filter & Variantenerzeugung ------------------
+def _allowed_for_n(n: int, v: dict) -> bool:
+    if "n_exact" in v and isinstance(v["n_exact"], int):
+        return n == v["n_exact"]
+    nmin = v.get("n_min", None); nmax = v.get("n_max", None)
+    if nmin is not None and n < int(nmin): return False
+    if nmax is not None and n > int(nmax): return False
+    return True
+
+def _allowed_for_weight(weight_mode: bool, v: dict) -> bool:
+    if v.get("weight_required", False) and not weight_mode:
+        return False
+    if v.get("weight_forbidden", False) and weight_mode:
+        return False
+    return True
+
+def generate_variants_from_config(cfg: dict, euro_n: int, ind_n: int, exact_tail: bool, weight_mode: bool=False):
     variants = cfg.get("variants", [])
     ind_pos_map = cfg.get("industry_position", {})
     out = []
     for idx, v in enumerate(variants):
+        if not _allowed_for_n(euro_n, v): 
+            continue
+        if not _allowed_for_weight(weight_mode, v):
+            continue
         title = v.get("title", f"Var {idx+1}")
         vtype = v.get("type", "all_long")
         euro_rows = build_euro_by_type(vtype, euro_n, exact_tail, v)
@@ -602,7 +656,6 @@ if weight_mode:
 # 3) Zeichnen Clean (ohne/mit Gewicht zur Orientierung)
 title_clean = f"Clean: {euro_n} Euro ({'exakt bis hinten' if exact_tail else 'stabil'}) + {ind_n} Industrie"
 if weight_mode:
-    # Zeige die weighted-Interpretation oben (mit Achslast)
     draw_graph(
         title_clean + " – (Gewichtsansicht)",
         rows_clean_weighted,
@@ -624,7 +677,7 @@ else:
         weight_mode=False,
         kg_euro=kg_euro,
         kg_ind=kg_ind,
-        show_axle_note=True  # Achslast grob auch ohne Weight-Modus anzeigen (falls kg gesetzt)
+        show_axle_note=True
     )
 
 # ------------------ Varianten-Konfiguration (JSON) ------------------
@@ -635,7 +688,7 @@ with conf_col1:
 with conf_col2:
     use_default_cfg = st.toggle("Default-Varianten verwenden", value=True if not cfg_file else False)
 
-# Default-Konfig (falls keine Datei geladen)
+# Default-Konfig (falls keine Datei geladen) – vier Standardmuster
 DEFAULT_CFG = {
     "variants": [
         { "title": "Var A – alles längs",         "type": "all_long" },
@@ -658,7 +711,7 @@ else:
 
 # ------------------ Varianten (2×2): IMMER anzeigen & automatisch aktualisieren ------------------
 st.markdown("#### Vordefinierte Varianten (2×2)")
-variants = generate_variants_from_config(cfg, euro_n, ind_n, exact_tail=exact_tail)
+variants = generate_variants_from_config(cfg, euro_n, ind_n, exact_tail=exact_tail, weight_mode=False)
 
 figsz = (6.6, 1.25)
 cols_top = st.columns(2, gap="small")
@@ -674,14 +727,18 @@ if len(variants) == 0:
 elif len(variants) > 4:
     st.caption(f"Es sind {len(variants)} Varianten in der JSON. Momentan werden die ersten 4 gezeigt.")
 
-# ===== Zusatz-Grid: Nur wenn Gewicht aktiv ist -> gleiche Varianten, aber mit Gewichts-Logik =====
-if weight_mode and len(variants) > 0:
+# ===== Zusatz-Grid: Nur wenn Gewicht aktiv ist -> bevorzugt Heavy-Varianten aus JSON =====
+if weight_mode:
+    variants_heavy = generate_variants_from_config(cfg, euro_n, ind_n, exact_tail=exact_tail, weight_mode=True)
+    if len(variants_heavy) == 0:
+        variants_heavy = variants  # Fallback: falls keine speziellen Heavy-Varianten definiert sind
+
     st.markdown("#### Varianten mit Gewichts-Logik (2×2)")
     cols_top_w = st.columns(2, gap="small")
     cols_bot_w = st.columns(2, gap="small")
     slots_w = [cols_top_w[0], cols_top_w[1], cols_bot_w[0], cols_bot_w[1]]
 
-    for i, (title_v, rows_v) in enumerate(variants[:4]):
+    for i, (title_v, rows_v) in enumerate(variants_heavy[:4]):
         with slots_w[i]:
             if mode in ("Block vorne", "Block hinten"):
                 draw_graph(
@@ -719,6 +776,8 @@ st.caption(
     "Grafik 1360×240 cm. Grün=Euro längs (120×80), Blau=Euro quer (80×120), Orange=Industrie (120×100). "
     "Tail-Regel: In den letzten 4 Reihen keine Einzel-quer; letzte Reihe immer voll. "
     "„Exakt bis hinten (Euro)“ füllt 1360 cm ohne Heck-Luft. "
-    "2×2-Varianten können per JSON erweitert werden (Uploader). "
-    "Achslast-Schätzung ist grob (Hebelmodell mit Stützen an den Enden) – als Richtwert gedacht."
+    "Varianten erweiterbar per JSON; nutze Typen: all_long, rear_block, mixed_periodic, alt_block, "
+    "recipe (rows: 1/2/3), heavy_auto_rear, light_auto_mix. "
+    "JSON-Filter: n_exact / n_min / n_max / weight_required / weight_forbidden. "
+    "Achslast-Schätzung ist grob (Hebelmodell)."
 )
