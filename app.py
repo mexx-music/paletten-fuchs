@@ -1,7 +1,8 @@
 # app.py
 # Paletten Fuchs – Clean + Grafik + Gewichtsmodi (Block vorne/hinten, Verteilen-Hecklast)
 # – Tabs-Fix (eindeutige Keys) – Inline 2×2 optional
-# – NEU: Buttons für Einzel-quer (1/2 vorne, mittig, 1/2 hinten + "Alle aktivieren")
+# – Buttons für Einzel-quer (1/2 vorne, mittig, 1/2 hinten + "Alle aktivieren")
+# – NEU: Letzte 4 Reihen niemals Einzel-quer; letzte Reihe immer voll (Abschluss). Buttons werden ignoriert, wenn nötig.
 
 from typing import List, Dict, Optional, Tuple, Set
 import streamlit as st
@@ -41,8 +42,101 @@ def cap_to_trailer(rows: List[Dict]) -> List[Dict]:
         s += L
     return out
 
-# --- Euro-Layout (Standard ohne Buttons – bleibt für evtl. Fallbacks) ---
-def layout_for_preset_euro(n: int, singles_front: int = 0) -> List[Dict]:
+def rows_length_cm(rows: List[Dict]) -> int:
+    return sum(r.get("len_cm", EURO_L_CM) for r in rows)
+
+def rows_pallets(rows: List[Dict]) -> int:
+    return sum(r.get("pallets", 0) for r in rows)
+
+# ------------------ Helfer: Abschluss erzwingen (keine Singles in den letzten 4 Reihen) ------------------
+def enforce_tail_no_single(rows: List[Dict], target_pal: int) -> List[Dict]:
+    """
+    Entfernt EURO_1_TRANS in den letzten 4 Reihen und versucht, die Paletteanzahl sauber aufzufüllen.
+    - Letzte Reihe immer voll (EURO_3_LONG oder EURO_2_TRANS)
+    - Trailerlänge darf nicht überschritten werden
+    - Falls nicht sauber möglich: Fallback auf klassisches, stabiles Schema
+    """
+    rows = list(rows)  # Kopie
+    rows = cap_to_trailer(rows)  # Sicherstellen, dass wir innerhalb des Trailers sind
+
+    # 1) Singles in den letzten 4 Reihen entfernen
+    n = len(rows)
+    if n > 0:
+        tail_start = max(0, n - 4)
+        cleaned = []
+        for i, r in enumerate(rows):
+            if i >= tail_start and r["type"] == "EURO_1_TRANS":
+                # ignoriere Single im Tail (Button wird sozusagen übersteuert)
+                continue
+            cleaned.append(r)
+        rows = cleaned
+
+    # 2) Falls letzte Reihe Single (kann nach 1) eigentlich nicht mehr vorkommen) → entfernen
+    if rows and rows[-1]["type"] == "EURO_1_TRANS":
+        rows.pop()
+
+    # 3) Paletten-Differenz auffüllen (ohne Trailer zu sprengen)
+    deficit = target_pal - rows_pallets(rows)
+    if deficit <= 0:
+        # ggf. zu viele Paletten? Dann Fallback auf klassisches Schema
+        if deficit < 0:
+            base = layout_for_preset_euro_stable(target_pal, singles_front=0)
+            return cap_to_trailer(base)
+        return rows
+
+    # Wir fügen vor dem Tail (vor den letzten max. 4 Reihen) auf
+    insert_limit = max(0, len(rows) - 4)
+
+    def try_insert_row(row_factory, at_idx: int) -> bool:
+        new_rows = rows[:at_idx] + [row_factory()] + rows[at_idx:]
+        if rows_length_cm(new_rows) <= TRAILER_LEN_CM:
+            rows[:] = new_rows
+            return True
+        return False
+
+    # zuerst: wenn deficit % 3 == 2 → versuche eine 2-quer einzubauen
+    if deficit % 3 == 2:
+        placed = False
+        # probiere von vorne bis kurz vor Tail
+        for ins in range(0, insert_limit + 1):
+            if try_insert_row(euro_row_trans2, ins):
+                deficit -= 2
+                placed = True
+                break
+        if not placed and rows_length_cm(rows) + EURO_W_CM <= TRAILER_LEN_CM:
+            rows.append(euro_row_trans2())
+            deficit -= 2
+
+    # dann so viele 3-längs wie möglich
+    while deficit >= 3 and rows_length_cm(rows) + EURO_L_CM <= TRAILER_LEN_CM:
+        # bevorzugt kurz vor dem Tail, damit der Abschluss hinten unberührt bleibt
+        ins = insert_limit
+        rows = rows[:ins] + [euro_row_long()] + rows[ins:]
+        deficit -= 3
+
+    # Wenn noch Rest übrig (1 oder 2) -> letzter Versuch 2-quer am Anfang
+    if deficit == 2 and rows_length_cm(rows) + EURO_W_CM <= TRAILER_LEN_CM:
+        rows = [euro_row_trans2()] + rows
+        deficit -= 2
+
+    # Sollte immer noch etwas fehlen → Fallback
+    if deficit != 0:
+        base = layout_for_preset_euro_stable(target_pal, singles_front=0)
+        rows = cap_to_trailer(base)
+
+    # 4) Finale Sicherung: keine Singles in den letzten 4
+    n = len(rows)
+    tail_start = max(0, n - 4)
+    if any(r["type"] == "EURO_1_TRANS" for r in rows[tail_start:]):
+        # Falls das passiert, fallbacken wir konsequent
+        base = layout_for_preset_euro_stable(target_pal, singles_front=0)
+        rows = cap_to_trailer(base)
+
+    return rows
+
+# ------------------ Euro-Layouts ------------------
+# (Stabile Standard-Funktion als Fallback / "klassisches Schema")
+def layout_for_preset_euro_stable(n: int, singles_front: int = 0) -> List[Dict]:
     rows: List[Dict] = []
     remaining = n
 
@@ -68,7 +162,7 @@ def layout_for_preset_euro(n: int, singles_front: int = 0) -> List[Dict]:
         rows += [euro_row_long() for _ in range(remaining // 3)]
 
     # 5) Absicherung
-    if sum(r.get("pallets", 0) for r in rows) != n:
+    if rows_pallets(rows) != n:
         if n >= 2 and (n - 2) % 3 == 0:
             rows = [euro_row_trans2()] + [euro_row_long() for _ in range((n - 2) // 3)]
         else:
@@ -77,9 +171,10 @@ def layout_for_preset_euro(n: int, singles_front: int = 0) -> List[Dict]:
             if rest == 2: rows.insert(0, euro_row_trans2())
             elif rest == 1: rows.insert(0, euro_row_trans1())
 
-    return rows
+    # Abschlussregel anwenden
+    return enforce_tail_no_single(rows, n)
 
-# --- NEU: Euro-Layout mit Buttons (1/2 vorne, mittig, 1/2 hinten) ---
+# (Buttons-Variante – nutzt am Ende enforce_tail_no_single)
 def layout_for_preset_euro_buttons(
     n: int,
     front1: bool = False,
@@ -88,13 +183,6 @@ def layout_for_preset_euro_buttons(
     rear1: bool = False,
     rear2: bool = False
 ) -> List[Dict]:
-    """
-    Baut Euro-Reihen mit optionalen Einzel-quer an:
-    - vorne: 0/1/2 (front1/front2; wenn beide True → 2)
-    - mittig: 0/1
-    - hinten: 0/1/2 (rear1/rear2; wenn beide True → 2)
-    Danach: wenn möglich eine 2-quer-Reihe und sonst 3-längs. Abschluss wie gehabt.
-    """
     rows: List[Dict] = []
     remaining = n
 
@@ -103,55 +191,56 @@ def layout_for_preset_euro_buttons(
     singles_rear  = 2 if rear2 else (1 if rear1 else 0)
     singles_total = singles_front + singles_mid + singles_rear
     if singles_total > remaining:
-        # zu viele Singles angehakt → von hinten kürzen
         cut = singles_total - remaining
+        # von hinten kürzen
         singles_rear = max(0, singles_rear - cut)
         singles_total = singles_front + singles_mid + singles_rear
 
-    # --- 1) vorne: Einzel-quer
+    # 1) vorne Singles
     take = min(singles_front, remaining)
     for _ in range(take):
         rows.append(euro_row_trans1())
     remaining -= take
 
-    # Rest, der noch für 2-quer/3-längs verfügbar ist (mittig+ hinten reservieren)
+    # Reserve für später (mid + rear)
     reserve_after = singles_mid + singles_rear
     usable_for_fill = max(0, remaining - reserve_after)
 
-    # --- 2) 2-quer einbauen, wenn es danach durch 3 teilbar ist
+    # 2) 2-quer wenn danach durch 3 teilbar
     if usable_for_fill >= 2 and (usable_for_fill - 2) % 3 == 0:
         rows.append(euro_row_trans2())
         remaining -= 2
         usable_for_fill -= 2
 
-    # --- 3) 3-längs auffüllen, aber Platz für mittig/hinten reservieren
+    # 3) 3-längs auffüllen (Platz für mid/rear reserviert)
     take3 = usable_for_fill // 3
     rows += [euro_row_long() for _ in range(take3)]
     remaining -= take3 * 3
 
-    # --- 4) mittig einen Einzel-quer einfügen (falls gewünscht/reserviert)
+    # 4) mittig Single
     if singles_mid and remaining > 0:
         mid_idx = max(0, min(len(rows), len(rows)//2))
         rows.insert(mid_idx, euro_row_trans1())
         remaining -= 1
 
-    # --- 5) hinten 1–2 Einzel-quer
+    # 5) hinten Singles (vorerst – werden ggf. später entfernt wegen Abschlussregel)
     take_rear = min(singles_rear, remaining)
     for _ in range(take_rear):
         rows.append(euro_row_trans1())
         remaining -= 1
 
-    # --- 6) Absicherung: falls wegen Rundungen noch etwas übrig ist, versuche sauber zu machen
-    if remaining > 0:
-        if remaining == 2:
-            rows.insert(0, euro_row_trans2())
-        else:
-            # Fallback: klassisches Schema
-            rows = layout_for_preset_euro(n, singles_front=0)
+    # 6) Falls noch Rest übrig, versuch 2-quer am Anfang
+    if remaining == 2 and rows_length_cm(rows) + EURO_W_CM <= TRAILER_LEN_CM:
+        rows = [euro_row_trans2()] + rows
+        remaining = 0
+    elif remaining > 0:
+        # als Fallback klassisch
+        return layout_for_preset_euro_stable(n, singles_front=0)
 
-    return rows
+    # 7) Abschlussregel: keine Singles in den letzten 4 + letzte Reihe voll
+    return enforce_tail_no_single(rows, n)
 
-# --- Industrie-Layout (ohne Gewichtsumordnung) ---
+# ------------------ Industrie-Layout (ohne Gewichtsumordnung) ------------------
 def layout_for_preset_industry(n: int) -> List[Dict]:
     if n <= 0: return []
     rows: List[Dict] = []
@@ -170,10 +259,9 @@ def _cat_of_row(r: Dict) -> str:
 def reorder_rows_heavy(rows: List[Dict],
                        heavy_euro_count: int,
                        heavy_ind_count: int,
-                       side: str = "front",              # "front" | "rear"
+                       side: str = "front",
                        group_by_type: bool = True,
                        type_order: Tuple[str,str] = ("EURO","IND")) -> List[Dict]:
-    """Zieht die ersten 'heavy_*_count' Paletten als zusammenhängenden Block an die gewählte Seite."""
     if heavy_euro_count <= 0 and heavy_ind_count <= 0:
         return rows
 
@@ -207,25 +295,18 @@ def reorder_rows_heavy(rows: List[Dict],
 
 # ------------------ VERTEILEN (HECKLAST): Reihen auswählen (nur Markierung) ------------------
 def pick_heavy_rows_rear_biased(rows: List[Dict], heavy_total: int) -> Set[int]:
-    """
-    Wählt Reihen-Indices, deren Paletten-Summe ≈ heavy_total ergibt – ohne Reihen umzubauen.
-    Hecklast: Reihen nahe dem Ende haben höhere Priorität; leichtes Einzel/Doppel-Muster.
-    """
     if heavy_total <= 0 or not rows:
         return set()
 
     N = len(rows)
-    # Score je Reihe: Position + sanfter Quadratik-Bias + Bonus für 1/2er-Reihen
     scored = []
     for i, r in enumerate(rows):
-        pos = (i + 1) / N                 # vorne~0 ... hinten~1
-        bias = 0.6*pos + 0.4*(pos**2)     # stärkerer Bias nach hinten
+        pos = (i + 1) / N
+        bias = 0.6*pos + 0.4*(pos**2)
         typ = r.get("type","")
         bonus = 0.08 if ("_1_" in typ or "_2_" in typ or "IND_SINGLE" in typ) else 0.0
         scored.append((i, bias + bonus, r.get("pallets", 0)))
 
-    # Greedy von hinten nach vorne (höchster Score zuerst),
-    # vermeide direkte Nachbarn (zur Not zulassen, um Soll zu erreichen).
     scored.sort(key=lambda t: t[1], reverse=True)
     picked: Set[int] = set()
     total = 0
@@ -233,20 +314,17 @@ def pick_heavy_rows_rear_biased(rows: List[Dict], heavy_total: int) -> Set[int]:
     def neighbors(k: int) -> bool:
         return (k-1 in picked) or (k+1 in picked)
 
-    # 1. Runde: ohne Nachbarschaft
     for idx, _, pal in scored:
         if total >= heavy_total: break
         if neighbors(idx): continue
         picked.add(idx); total += pal
 
-    # 2. Runde: gelegentlich Paare zulassen (Doppel-Muster),
-    # aber nie 3 direkt hintereinander
     if total < heavy_total:
         for idx, _, pal in scored:
             if total >= heavy_total: break
             if idx in picked: continue
             if ((idx-1 in picked) and (idx-2 in picked)) or ((idx+1 in picked) and (idx+2 in picked)):
-                continue  # würde Kettenbildung 3er verursachen
+                continue
             picked.add(idx); total += pal
 
     return picked
@@ -255,13 +333,12 @@ def pick_heavy_rows_rear_biased(rows: List[Dict], heavy_total: int) -> Set[int]:
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
-COLOR_EURO_LONG = "#d9f2d9"   # hellgrün
-COLOR_EURO_QUER = "#cfe8ff"   # hellblau
-COLOR_IND      = "#ffe2b3"    # hellorange
+COLOR_EURO_LONG = "#d9f2d9"
+COLOR_EURO_QUER = "#cfe8ff"
+COLOR_IND      = "#ffe2b3"
 EDGE           = "#4a4a4a"
 
 def rows_to_rects(rows: List[Dict]) -> List[Tuple[float,float,float,float,str,str,bool]]:
-    """Rechtecke ohne Markierung: (x,y,w,h,color,cat,heavy=False)."""
     rects = []
     x = 0
     for r in rows:
@@ -287,9 +364,8 @@ def rows_to_rects(rows: List[Dict]) -> List[Tuple[float,float,float,float,str,st
     return rects
 
 def rows_to_rects_with_row_index(rows: List[Dict]):
-    """Wie rows_to_rects, liefert zusätzlich row_idx je Rechteck (für Verteil-Modus)."""
-    rects = []   # (x,y,w,h,color,cat)
-    meta  = []   # {"row_idx": i, "cat": "EURO"/"IND"}
+    rects = []
+    meta  = []
     x = 0
     for i, r in enumerate(rows):
         t = r["type"]; L = r["len_cm"]
@@ -321,7 +397,6 @@ def rows_to_rects_with_row_index(rows: List[Dict]):
 def rows_to_rects_with_weights(rows: List[Dict],
                                heavy_euro_count: int = 0, heavy_euro_side: str = "front",
                                heavy_ind_count: int = 0,  heavy_ind_side: str  = "front"):
-    """Block-Modus: markiert die ersten heavy_* ab Front oder Rear (pro Typ)."""
     rects = []
     x = 0
     euro_rects = []
@@ -353,7 +428,6 @@ def rows_to_rects_with_weights(rows: List[Dict],
             ind_rects.append(len(rects)-1)
             x += L
 
-    # Euro
     euro_cnt = len(euro_rects)
     if heavy_euro_count > 0 and euro_cnt > 0:
         indices = (list(reversed(euro_rects)) if heavy_euro_side == "rear" else euro_rects)[:heavy_euro_count]
@@ -362,7 +436,6 @@ def rows_to_rects_with_weights(rows: List[Dict],
             rects[idx] = (x0,y0,w0,h0,c0,cat0,True)
     euro_hvy = sum(1 for i in euro_rects if rects[i][6] is True)
 
-    # Industrie
     ind_cnt = len(ind_rects)
     if heavy_ind_count > 0 and ind_cnt > 0:
         indices = (list(reversed(ind_rects)) if heavy_ind_side == "rear" else ind_rects)[:heavy_ind_count]
@@ -379,23 +452,14 @@ def draw_graph(title: str,
                weight_mode: bool = False,
                kg_euro: int = 0,
                kg_ind: int = 0,
-               # Block-Parameter:
                heavy_euro_count: int = 0, heavy_ind_count: int = 0, heavy_side: str = "front",
-               # Verteilen-Parameter:
                heavy_rows: Optional[Set[int]] = None):
-    """
-    Grafische Draufsicht. Drei Modi:
-      - Kein Gewicht: rows_to_rects
-      - Block: rows_to_rects_with_weights (pro Typ, Front/Rear)
-      - Verteilen: rows_to_rects_with_row_index + heavy_rows (Euro+Ind gemeinsam, Heck-Bias)
-    """
     if not weight_mode:
         rects = rows_to_rects(cap_to_trailer(rows))
         euro_cnt = sum(1 for *_,cat,_ in rects if cat=="EURO")
         ind_cnt  = sum(1 for *_,cat,_ in rects if cat=="IND")
         euro_hvy = ind_hvy = 0
     elif heavy_rows is not None:
-        # Verteilen (Hecklast)
         base, meta = rows_to_rects_with_row_index(cap_to_trailer(rows))
         rects = []
         euro_cnt = sum(1 for m in meta if m["cat"]=="EURO")
@@ -407,14 +471,10 @@ def draw_graph(title: str,
             if hv and cat=="IND":  ind_hvy  += 1
             rects.append((x,y,w,h,c,cat,hv))
     else:
-        # Block
         rects, euro_cnt, ind_cnt, euro_hvy, ind_hvy = rows_to_rects_with_weights(
             rows, heavy_euro_count=heavy_euro_count, heavy_euro_side=heavy_side,
             heavy_ind_count=heavy_ind_count, heavy_ind_side=heavy_side
         )
-
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Rectangle
 
     fig, ax = plt.subplots(figsize=figsize)
     ax.add_patch(Rectangle((0, 0), TRAILER_LEN_CM, TRAILER_W_CM,
@@ -459,10 +519,8 @@ with c2:
     with colbB:
         btn_front2 = st.toggle("2 vorne", value=False)
         btn_all    = st.toggle("Alle aktivieren", value=False,
-                               help="Aktiviert 2 vorne, mittig und 2 hinten.")
+                               help="Aktiviert 2 vorne, mittig und 2 hinten. Heck-Tail bleibt immer voll.")
         btn_rear2  = st.toggle("2 hinten", value=False)
-
-    # 'Alle' schaltet ein sinnvolles Vollmuster
     if btn_all:
         btn_front1 = False
         btn_front2 = True
@@ -483,7 +541,6 @@ with st.expander("Gewicht & Modus (optional)", expanded=False):
                         index=0, horizontal=True)
     weight_mode = (mode != "Aus")
 
-    # Eingaben für Block-Modus (unverändert):
     hvy_e = hvy_i = 0
     group_block = True
     type_order = ("EURO","IND")
@@ -500,13 +557,12 @@ with st.expander("Gewicht & Modus (optional)", expanded=False):
             first = st.radio("Reihenfolge im Block", ["Euro zuerst","Industrie zuerst"], index=0, horizontal=True)
         type_order = ("EURO","IND") if first=="Euro zuerst" else ("IND","EURO")
 
-    # Eingabe für Verteilen (Euro+Ind gemeinsam):
     heavy_total = 0
     if mode == "Verteilen (Hecklast)":
         heavy_total = st.number_input("Gesamtanzahl schwere Paletten", 0, 200, 20, step=1,
                                       help="Euro + Industrie zusammen; werden hecklastig verteilt.")
 
-# 1) Reihen bauen (mit Buttons-Layout)
+# 1) Reihen bauen (mit Buttons) + Abschlussregel
 rows_clean: List[Dict] = []
 if euro_n > 0:
     rows_clean += layout_for_preset_euro_buttons(
@@ -528,10 +584,10 @@ if weight_mode:
         rows_clean = reorder_rows_heavy(rows_clean, hvy_e, hvy_i, side="rear",
                                         group_by_type=group_block, type_order=type_order)
     elif mode == "Verteilen (Hecklast)":
-        total_pal = sum(r.get("pallets",0) for r in rows_clean)
+        total_pal = rows_pallets(rows_clean)
         qty = min(heavy_total, total_pal)
         if qty >= total_pal:
-            heavy_rows = set(range(len(rows_clean)))   # alle Reihen schwer
+            heavy_rows = set(range(len(rows_clean)))
         else:
             heavy_rows = pick_heavy_rows_rear_biased(rows_clean, qty)
 
@@ -559,7 +615,7 @@ def inline_four_variants_grid():
         with c[0]:
             e = st.number_input(f"Euro V{idx}", 0, 40, 0 if idx>1 else 33, step=1, key=f"iv_e{idx}")
         with c[1]:
-            s = st.slider(f"Einzel V{idx}", 0, 2, 0, key=f"iv_s{idx}")  # (Optional: auf Buttons umrüstbar)
+            s = st.slider(f"Einzel V{idx}", 0, 2, 0, key=f"iv_s{idx}")  # (Optional: später auf Buttons umrüstbar)
         with c[2]:
             i = st.number_input(f"Industrie V{idx}", 0, 40, 0, step=1, key=f"iv_i{idx}")
 
@@ -586,12 +642,10 @@ def inline_four_variants_grid():
                 else:
                     heavy_total_v = st.number_input(f"Gesamt schwer V{idx}", 0, 200, 20, step=1, key=f"iv_ht{idx}")
 
-        # Reihen
         r: List[Dict] = []
-        if e > 0: r += layout_for_preset_euro(e, singles_front=s)  # (Optional: Buttons-Variante)
+        if e > 0: r += layout_for_preset_euro_stable(e, singles_front=s)
         if i > 0: r += layout_for_preset_industry(i)
 
-        # Gewichtslogik
         heavy_rows_v: Optional[Set[int]] = None
         if wm:
             if m == "Block vorne":
@@ -599,7 +653,7 @@ def inline_four_variants_grid():
             elif m == "Block hinten":
                 r = reorder_rows_heavy(r, he, hi, side="rear", group_by_type=group_v, type_order=order_v)
             elif m == "Verteilen (Hecklast)":
-                total_pal_v = sum(x.get("pallets",0) for x in r)
+                total_pal_v = rows_pallets(r)
                 qty = min(heavy_total_v, total_pal_v)
                 if qty >= total_pal_v:
                     heavy_rows_v = set(range(len(r)))
@@ -687,12 +741,10 @@ def tab_ui(tab, idx: int, label: str, defaults=(33,0,0)):
                 else:
                     heavy_total_v = st.number_input(f"Gesamt schwer ({label})", 0, 200, 20, step=1, key=f"tv_ht_{idx}")
 
-        # Reihen
         r: List[Dict] = []
-        if e > 0: r += layout_for_preset_euro(e, singles_front=s)  # (Tabs lassen wir vorerst beim Slider)
+        if e > 0: r += layout_for_preset_euro_stable(e, singles_front=s)
         if i > 0: r += layout_for_preset_industry(i)
 
-        # Gewichtslogik
         heavy_rows_v: Optional[Set[int]] = None
         if wm:
             if m == "Block vorne":
@@ -700,7 +752,7 @@ def tab_ui(tab, idx: int, label: str, defaults=(33,0,0)):
             elif m == "Block hinten":
                 r = reorder_rows_heavy(r, he, hi, side="rear", group_by_type=group_v, type_order=order_v)
             elif m == "Verteilen (Hecklast)":
-                total_pal_v = sum(x.get("pallets",0) for x in r)
+                total_pal_v = rows_pallets(r)
                 qty = min(heavy_total_v, total_pal_v)
                 if qty >= total_pal_v:
                     heavy_rows_v = set(range(len(r)))
@@ -718,5 +770,5 @@ if SHOW_TABS:
     compare_tabs_four_variants()
 
 st.caption("Grafik 1360×240 cm. Grün=Euro längs (120×80), Blau=Euro quer (80×120), Orange=Industrie (120×100). "
-           "Modi: Block vorne/hinten oder Verteilen (Hecklast) mit Gesamt‑Schwerzahl (Euro+Industrie). "
-           "Einzel‑quer jetzt per Buttons: 1/2 vorne, mittig, 1/2 hinten.")
+           "Tail-Regel: In den letzten 4 Reihen keine Einzel-quer; letzte Reihe immer voll. "
+           "Modi: Block vorne/hinten oder Verteilen (Hecklast).")
