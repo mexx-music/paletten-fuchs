@@ -1,10 +1,10 @@
-# app.py
-# Paletten Fuchs – Clean + Grafik + Gewichtsmodi
-# – Buttons für Einzel-quer (1/2 vorne, mittig, 1/2 hinten + "Alle aktivieren")
-# – Tail-Regel: Letzte 4 Reihen niemals Einzel-quer; letzte Reihe immer voll
-# – "Exakt bis hinten (Euro)" – füllt exakt 1360 cm (Heck 0 cm), keine Singles im Tail
-# – Eine 2×2-Ansicht mit vordefinierten Varianten (gekoppelt an die oberen Eingaben)
-# – JSON-Konfig (variants.json) zum Erweitern der Varianten ohne Code-Upload
+# app.py — Paletten Fuchs 9.4
+# - Clean-Ansicht (Euro/Industrie + "Exakt bis hinten")
+# - Varianten (2×2) IMMER sichtbar, gekoppelt an die Eingaben oben
+# - JSON-Konfig: variants.json upload (beliebig viele Muster), Default-Konfig als Fallback
+# - Gewicht: Block vorne/hinten, Verteilen (Hecklast)
+# - BONUS: Bei aktivem Gewicht zusätzliches 2×2 mit Gewichts-Logik
+# - Achslast-Schätzung (grob): Front/Rear basierend auf Hebelmodell (Stützen an x=0 und x=1360)
 
 from typing import List, Dict, Optional, Tuple, Set
 import streamlit as st
@@ -139,50 +139,6 @@ def layout_for_preset_euro_stable(n: int, singles_front: int = 0) -> List[Dict]:
             rest = n % 3
             if rest == 2: rows.insert(0, euro_row_trans2())
             elif rest == 1: rows.insert(0, euro_row_trans1())
-
-    return enforce_tail_no_single(rows, n)
-
-def layout_for_preset_euro_buttons(
-    n: int,
-    front1: bool = False,
-    front2: bool = False,
-    mid1: bool = False,
-    rear1: bool = False,
-    rear2: bool = False
-) -> List[Dict]:
-    rows: List[Dict] = []; remaining = n
-    singles_front = 2 if front2 else (1 if front1 else 0)
-    singles_mid   = 1 if mid1 else 0
-    singles_rear  = 2 if rear2 else (1 if rear1 else 0)
-    singles_total = singles_front + singles_mid + singles_rear
-    if singles_total > remaining:
-        cut = singles_total - remaining
-        singles_rear = max(0, singles_rear - cut)
-
-    take = min(singles_front, remaining)
-    for _ in range(take): rows.append(euro_row_trans1()); remaining -= 1
-
-    reserve_after = singles_mid + singles_rear
-    usable = max(0, remaining - reserve_after)
-
-    if usable >= 2 and (usable - 2) % 3 == 0:
-        rows.append(euro_row_trans2()); remaining -= 2; usable -= 2
-
-    take3 = usable // 3
-    rows += [euro_row_long() for _ in range(take3)]; remaining -= take3 * 3
-
-    if singles_mid and remaining > 0:
-        mid_idx = max(0, min(len(rows), len(rows)//2))
-        rows.insert(mid_idx, euro_row_trans1()); remaining -= 1
-
-    take_rear = min(singles_rear, remaining)
-    for _ in range(take_rear):
-        rows.append(euro_row_trans1()); remaining -= 1
-
-    if remaining == 2 and rows_length_cm(rows) + EURO_W_CM <= TRAILER_LEN_CM:
-        rows = [euro_row_trans2()] + rows
-    elif remaining > 0:
-        return layout_for_preset_euro_stable(n, singles_front=0)
 
     return enforce_tail_no_single(rows, n)
 
@@ -395,6 +351,39 @@ def rows_to_rects_with_weights(rows: List[Dict],
 
     return rects, euro_cnt, ind_cnt, euro_hvy, ind_hvy
 
+# ---- Achslast-Schätzung (grob, Stützen an x=0 und x=1360) ----
+def estimate_axle_loads(rows: List[Dict], kg_euro: int, kg_ind: int) -> Tuple[float, float, float]:
+    """
+    Hebelmodell: Reaktionen an Front (x=0) und Rear (x=L).
+    Wir verwenden Rechteckmittelpunkte als Angriffspunkte.
+    Rückgabe: (front_kg, rear_kg, total_kg)
+    """
+    if kg_euro <= 0 and kg_ind <= 0:
+        return (0.0, 0.0, 0.0)
+    rects = rows_to_rects(cap_to_trailer(rows))
+    L = float(TRAILER_LEN_CM)
+    W = 0.0
+    M_about_front = 0.0
+    for (x, y, w, h, color, cat, hv) in rects:
+        wkg = kg_euro if cat == "EURO" else kg_ind
+        if wkg <= 0:
+            continue
+        xc = x + w / 2.0
+        W += wkg
+        M_about_front += wkg * xc
+    if W <= 0:
+        return (0.0, 0.0, 0.0)
+    R_rear = M_about_front / L
+    R_front = W - R_rear
+    return (max(0.0, R_front), max(0.0, R_rear), W)
+
+def caption_axle(front: float, rear: float, total: float) -> str:
+    if total <= 0:
+        return ""
+    pf = 100.0 * front / total
+    pr = 100.0 * rear  / total
+    return f"Achslast (grob): Front ≈ **{front:.0f} kg** ({pf:.1f}%), Rear ≈ **{rear:.0f} kg** ({pr:.1f}%)."
+
 def draw_graph(title: str,
                rows: List[Dict],
                figsize: Tuple[float,float] = (8, 1.7),
@@ -402,7 +391,8 @@ def draw_graph(title: str,
                kg_euro: int = 0,
                kg_ind: int = 0,
                heavy_euro_count: int = 0, heavy_ind_count: int = 0, heavy_side: str = "front",
-               heavy_rows: Optional[Set[int]] = None):
+               heavy_rows: Optional[Set[int]] = None,
+               show_axle_note: bool = False):
     if not weight_mode:
         rects = rows_to_rects(cap_to_trailer(rows))
         euro_cnt = sum(1 for *_,cat,_ in rects if cat=="EURO")
@@ -425,6 +415,9 @@ def draw_graph(title: str,
             heavy_ind_count=heavy_ind_count, heavy_ind_side=heavy_side
         )
 
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
     fig, ax = plt.subplots(figsize=figsize)
     ax.add_patch(Rectangle((0, 0), TRAILER_LEN_CM, TRAILER_W_CM,
                            fill=False, linewidth=2, edgecolor="#333"))
@@ -440,11 +433,19 @@ def draw_graph(title: str,
     ax.set_aspect('equal'); ax.axis('off'); ax.set_title(title, fontsize=12, pad=6)
     st.pyplot(fig); plt.close(fig)
 
-    if weight_mode and (kg_euro or kg_ind):
-        total = euro_cnt * kg_euro + ind_cnt * kg_ind
-        marked = (euro_hvy * kg_euro + ind_hvy * kg_ind)
-        st.caption(f"Gewicht: gesamt ≈ **{total:.0f} kg**, markiert ≈ **{marked:.0f} kg** "
-                   f"(Euro: {euro_cnt}×{kg_euro} kg, Ind.: {ind_cnt}×{kg_ind} kg)")
+    # Gesamtgewicht (wenn gewünscht) + Achslasten
+    if (weight_mode or show_axle_note) and (kg_euro or kg_ind):
+        front, rear, total = estimate_axle_loads(rows, kg_euro, kg_ind)
+        axl = caption_axle(front, rear, total)
+        if weight_mode:
+            total_e = euro_cnt * kg_euro
+            total_i = ind_cnt  * kg_ind
+            st.caption(
+                f"Gewicht: gesamt ≈ **{total_e + total_i:.0f} kg** "
+                f"(Euro: {euro_cnt}×{kg_euro}, Ind.: {ind_cnt}×{kg_ind}). {axl}"
+            )
+        else:
+            st.caption(axl)
 
 # ------------------ Vordefinierte Varianten (Euro) ------------------
 def _choose_k_for_no_single(n: int, k_max: int) -> int:
@@ -481,7 +482,6 @@ def build_euro_mixed_periodic(n: int, period: int, exact_tail: bool) -> List[Dic
     used_long = 0; used_k = 0
     cursor = 0.0
     while used_long + used_k < long_cnt + k:
-        # einfache Streuung der 2-quer-Reihen
         if used_k < k and (used_long + used_k) >= cursor + quota * (used_k + 1):
             out.append(euro_row_trans2()); used_k += 1
         else:
@@ -533,30 +533,14 @@ def generate_variants_from_config(cfg: dict, euro_n: int, ind_n: int, exact_tail
 st.title("🦊 Paletten Fuchs – Grafik & Gewicht")
 st.subheader("Clean-Ansicht (Grafik) – Euro + Industrie")
 
-c1, c2, c3 = st.columns(3)
+c1, c3 = st.columns([1,1])
 with c1:
     euro_n = st.number_input("Euro-Paletten", 0, 40, 33, step=1)
-with c2:
-    st.markdown("**Einzel-quer platzieren**")
-    colbA, colbB = st.columns(2)
-    with colbA:
-        btn_front1 = st.toggle("1 vorne", value=False)
-        btn_mid1   = st.toggle("mittig quer", value=False)
-        btn_rear1  = st.toggle("1 hinten", value=False)
-    with colbB:
-        btn_front2 = st.toggle("2 vorne", value=False)
-        btn_all    = st.toggle("Alle aktivieren", value=False,
-                               help="Aktiviert 2 vorne, mittig und 2 hinten. Heck bleibt immer voll.")
-        btn_rear2  = st.toggle("2 hinten", value=False)
-    if btn_all:
-        btn_front1 = False; btn_front2 = True
-        btn_mid1   = True
-        btn_rear1  = False; btn_rear2  = True
-
-    exact_tail = st.toggle("Exakt bis hinten (Euro)", value=False,
-                           help="Euro füllt exakt 1360 cm (Heck 0 cm), keine 1‑quer im Heck (letzte 4 Reihen), letzte Reihe voll.")
 with c3:
     ind_n = st.number_input("Industrie-Paletten", 0, 40, 0, step=1)
+
+exact_tail = st.toggle("Exakt bis hinten (Euro)", value=False,
+                       help="Euro füllt exakt 1360 cm (Heck 0 cm), keine 1‑quer im Heck (letzte 4 Reihen), letzte Reihe voll.")
 
 with st.expander("Gewicht & Modus (optional)", expanded=False):
     colw = st.columns([1.2,1.2,1.6])
@@ -596,43 +580,52 @@ if euro_n > 0:
     if exact_tail:
         rows_clean += build_euro_exact_tail(euro_n)
     else:
-        rows_clean += layout_for_preset_euro_buttons(
-            euro_n,
-            front1=btn_front1, front2=btn_front2,
-            mid1=btn_mid1,
-            rear1=btn_rear1, rear2=btn_rear2
-        )
+        rows_clean += layout_for_preset_euro_stable(euro_n, singles_front=0)
 if ind_n > 0:
     rows_clean += layout_for_preset_industry(ind_n)
 
-# 2) Gewichtslogik anwenden
+# 2) Gewichtslogik anwenden (nur für Clean-Vorschau)
 heavy_rows: Optional[Set[int]] = None
+rows_clean_weighted = list(rows_clean)
 if weight_mode:
     if mode == "Block vorne":
-        rows_clean = reorder_rows_heavy(rows_clean, hvy_e, hvy_i, side="front",
-                                        group_by_type=group_block, type_order=type_order)
+        rows_clean_weighted = reorder_rows_heavy(rows_clean_weighted, hvy_e, hvy_i, side="front",
+                                                 group_by_type=group_block, type_order=type_order)
     elif mode == "Block hinten":
-        rows_clean = reorder_rows_heavy(rows_clean, hvy_e, hvy_i, side="rear",
-                                        group_by_type=group_block, type_order=type_order)
+        rows_clean_weighted = reorder_rows_heavy(rows_clean_weighted, hvy_e, hvy_i, side="rear",
+                                                 group_by_type=group_block, type_order=type_order)
     elif mode == "Verteilen (Hecklast)":
-        total_pal = rows_pallets(rows_clean)
+        total_pal = rows_pallets(rows_clean_weighted)
         qty = min(heavy_total, total_pal)
-        heavy_rows = set(range(len(rows_clean))) if qty >= total_pal else pick_heavy_rows_rear_biased(rows_clean, qty)
+        heavy_rows = set(range(len(rows_clean_weighted))) if qty >= total_pal else pick_heavy_rows_rear_biased(rows_clean_weighted, qty)
 
-# 3) Zeichnen Clean
-title = f"Clean: {euro_n} Euro ({'exakt bis hinten' if exact_tail else 'Buttons'}) + {ind_n} Industrie"
-draw_graph(
-    title,
-    rows_clean,
-    figsize=(8, 1.7),
-    weight_mode=weight_mode,
-    kg_euro=kg_euro if weight_mode else 0,
-    kg_ind=kg_ind if weight_mode else 0,
-    heavy_euro_count=hvy_e if (weight_mode and mode in ('Block vorne','Block hinten')) else 0,
-    heavy_ind_count=hvy_i if (weight_mode and mode in ('Block vorne','Block hinten')) else 0,
-    heavy_side=('rear' if mode=='Block hinten' else 'front'),
-    heavy_rows=heavy_rows if (weight_mode and mode=='Verteilen (Hecklast)') else None
-)
+# 3) Zeichnen Clean (ohne/mit Gewicht zur Orientierung)
+title_clean = f"Clean: {euro_n} Euro ({'exakt bis hinten' if exact_tail else 'stabil'}) + {ind_n} Industrie"
+if weight_mode:
+    # Zeige die weighted-Interpretation oben (mit Achslast)
+    draw_graph(
+        title_clean + " – (Gewichtsansicht)",
+        rows_clean_weighted,
+        figsize=(8, 1.7),
+        weight_mode=True,
+        kg_euro=kg_euro,
+        kg_ind=kg_ind,
+        heavy_euro_count=hvy_e if mode in ('Block vorne','Block hinten') else 0,
+        heavy_ind_count=hvy_i if mode in ('Block vorne','Block hinten') else 0,
+        heavy_side=('rear' if mode=='Block hinten' else 'front'),
+        heavy_rows=heavy_rows if mode=='Verteilen (Hecklast)' else None,
+        show_axle_note=True
+    )
+else:
+    draw_graph(
+        title_clean,
+        rows_clean,
+        figsize=(8, 1.7),
+        weight_mode=False,
+        kg_euro=kg_euro,
+        kg_ind=kg_ind,
+        show_axle_note=True  # Achslast grob auch ohne Weight-Modus anzeigen (falls kg gesetzt)
+    )
 
 # ------------------ Varianten-Konfiguration (JSON) ------------------
 st.markdown("##### Varianten-Konfiguration")
@@ -663,28 +656,69 @@ if cfg_file and not use_default_cfg:
 else:
     cfg = DEFAULT_CFG
 
-# 4) Eine 2×2-Ansicht: vordefinierte Varianten aus JSON (gekoppelt an Eingaben)
-show_variants = st.toggle("Vordefinierte Varianten (2×2) anzeigen", value=False,
-                          help="Zeigt Varianten aus der JSON-Konfig basierend auf den obigen Eingaben.")
-if show_variants:
-    variants = generate_variants_from_config(cfg, euro_n, ind_n, exact_tail=exact_tail)
+# ------------------ Varianten (2×2): IMMER anzeigen & automatisch aktualisieren ------------------
+st.markdown("#### Vordefinierte Varianten (2×2)")
+variants = generate_variants_from_config(cfg, euro_n, ind_n, exact_tail=exact_tail)
 
-    # bis zu 4 Varianten rendern
-    figsz = (6.6, 1.25)
-    cols_top = st.columns(2, gap="small")
-    cols_bot = st.columns(2, gap="small")
-    slots = [cols_top[0], cols_top[1], cols_bot[0], cols_bot[1]]
+figsz = (6.6, 1.25)
+cols_top = st.columns(2, gap="small")
+cols_bot = st.columns(2, gap="small")
+slots = [cols_top[0], cols_top[1], cols_bot[0], cols_bot[1]]
+
+for i, (title_v, rows_v) in enumerate(variants[:4]):
+    with slots[i]:
+        draw_graph(title_v, rows_v, figsize=figsz, weight_mode=False, show_axle_note=False)
+
+if len(variants) == 0:
+    st.info("Keine Varianten in der Konfig gefunden.")
+elif len(variants) > 4:
+    st.caption(f"Es sind {len(variants)} Varianten in der JSON. Momentan werden die ersten 4 gezeigt.")
+
+# ===== Zusatz-Grid: Nur wenn Gewicht aktiv ist -> gleiche Varianten, aber mit Gewichts-Logik =====
+if weight_mode and len(variants) > 0:
+    st.markdown("#### Varianten mit Gewichts-Logik (2×2)")
+    cols_top_w = st.columns(2, gap="small")
+    cols_bot_w = st.columns(2, gap="small")
+    slots_w = [cols_top_w[0], cols_top_w[1], cols_bot_w[0], cols_bot_w[1]]
 
     for i, (title_v, rows_v) in enumerate(variants[:4]):
-        with slots[i]:
-            draw_graph(title_v, rows_v, figsize=figsz, weight_mode=False)
+        with slots_w[i]:
+            if mode in ("Block vorne", "Block hinten"):
+                draw_graph(
+                    f"{title_v} – {'Block hinten' if mode=='Block hinten' else 'Block vorne'}",
+                    rows_v,
+                    figsize=figsz,
+                    weight_mode=True,
+                    kg_euro=kg_euro,
+                    kg_ind=kg_ind,
+                    heavy_euro_count=hvy_e,
+                    heavy_ind_count=hvy_i,
+                    heavy_side=("rear" if mode=="Block hinten" else "front"),
+                    heavy_rows=None,
+                    show_axle_note=True
+                )
+            elif mode == "Verteilen (Hecklast)":
+                total_pal_v = rows_pallets(rows_v)
+                qty = min(heavy_total, total_pal_v)
+                if qty >= total_pal_v:
+                    heavy_rows_v = set(range(len(rows_v)))
+                else:
+                    heavy_rows_v = pick_heavy_rows_rear_biased(rows_v, qty)
+                draw_graph(
+                    f"{title_v} – Verteilen (hecklastig)",
+                    rows_v,
+                    figsize=figsz,
+                    weight_mode=True,
+                    kg_euro=kg_euro,
+                    kg_ind=kg_ind,
+                    heavy_rows=heavy_rows_v,
+                    show_axle_note=True
+                )
 
-    if len(variants) == 0:
-        st.info("Keine Varianten in der Konfig gefunden.")
-    elif len(variants) > 4:
-        st.info(f"In der Konfig sind {len(variants)} Varianten. Es werden die ersten 4 gezeigt.")
-
-st.caption("Grafik 1360×240 cm. Grün=Euro längs (120×80), Blau=Euro quer (80×120), Orange=Industrie (120×100). "
-           "Tail-Regel: In den letzten 4 Reihen keine Einzel-quer; letzte Reihe immer voll. "
-           "„Exakt bis hinten (Euro)“ füllt 1360 cm ohne Heck-Luft. "
-           "Die 2×2-Varianten können per JSON erweitert werden (Uploader).")
+st.caption(
+    "Grafik 1360×240 cm. Grün=Euro längs (120×80), Blau=Euro quer (80×120), Orange=Industrie (120×100). "
+    "Tail-Regel: In den letzten 4 Reihen keine Einzel-quer; letzte Reihe immer voll. "
+    "„Exakt bis hinten (Euro)“ füllt 1360 cm ohne Heck-Luft. "
+    "2×2-Varianten können per JSON erweitert werden (Uploader). "
+    "Achslast-Schätzung ist grob (Hebelmodell mit Stützen an den Enden) – als Richtwert gedacht."
+)
