@@ -1,9 +1,9 @@
 # app.py
 # Paletten Fuchs – Clean + Grafik + Gewichtsmodi (Block vorne/hinten, Verteilen-Hecklast)
-# – Tabs-Fix (eindeutige Keys) – Inline 2×2 optional
 # – Buttons für Einzel-quer (1/2 vorne, mittig, 1/2 hinten + "Alle aktivieren")
 # – Tail-Regel: Letzte 4 Reihen niemals Einzel-quer; letzte Reihe immer voll
-# – NEU: "Exakt bis hinten (Euro)" – füllt exakt 1360 cm (Heck 0 cm), keine Singles im Tail
+# – "Exakt bis hinten (Euro)" – füllt exakt 1360 cm (Heck 0 cm), keine Singles im Tail
+# – NEU: Eine einzige 2×2-Ansicht mit 4 vordefinierten Varianten, gekoppelt an die oberen Eingaben
 
 from typing import List, Dict, Optional, Tuple, Set
 import streamlit as st
@@ -51,12 +51,6 @@ def rows_pallets(rows: List[Dict]) -> int:
 
 # ------------------ Helfer: Abschluss erzwingen (keine Singles in den letzten 4 Reihen) ------------------
 def enforce_tail_no_single(rows: List[Dict], target_pal: int) -> List[Dict]:
-    """
-    Entfernt EURO_1_TRANS in den letzten 4 Reihen und versucht, die Palettenanzahl sauber aufzufüllen.
-    - Letzte Reihe immer voll (EURO_3_LONG oder EURO_2_TRANS)
-    - Trailerlänge darf nicht überschritten werden
-    - Falls nicht sauber möglich: Fallback auf klassisches, stabiles Schema
-    """
     rows = list(rows)
     rows = cap_to_trailer(rows)
 
@@ -67,11 +61,11 @@ def enforce_tail_no_single(rows: List[Dict], target_pal: int) -> List[Dict]:
         cleaned = []
         for i, r in enumerate(rows):
             if i >= tail_start and r["type"] == "EURO_1_TRANS":
-                continue  # Single im Tail wird ignoriert
+                continue
             cleaned.append(r)
         rows = cleaned
 
-    # 2) Falls letzte Reihe Single (sollte nach 1) nicht mehr passieren)
+    # 2) Falls letzte Reihe Single (zusätzliche Sicherung)
     if rows and rows[-1]["type"] == "EURO_1_TRANS":
         rows.pop()
 
@@ -92,7 +86,7 @@ def enforce_tail_no_single(rows: List[Dict], target_pal: int) -> List[Dict]:
             return True
         return False
 
-    # Falls 2 Paletten fehlen → 2-quer versuchen
+    # Falls 2 fehlen → 2-quer versuchen
     if deficit % 3 == 2:
         placed = False
         for ins in range(0, insert_limit + 1):
@@ -104,7 +98,7 @@ def enforce_tail_no_single(rows: List[Dict], target_pal: int) -> List[Dict]:
             rows.append(euro_row_trans2())
             deficit -= 2
 
-    # Dann 3-längs auffüllen, bevorzugt vor dem Tail
+    # Dann 3-längs auffüllen (vor dem Tail)
     while deficit >= 3 and rows_length_cm(rows) + EURO_L_CM <= TRAILER_LEN_CM:
         ins = insert_limit
         rows = rows[:ins] + [euro_row_long()] + rows[ins:]
@@ -128,34 +122,28 @@ def enforce_tail_no_single(rows: List[Dict], target_pal: int) -> List[Dict]:
 
     return rows
 
-# ------------------ Euro-Layouts ------------------
-# (Stabile Standard-Funktion als Fallback / "klassisches Schema")
+# ------------------ Euro-Layouts (Standard & Buttons) ------------------
 def layout_for_preset_euro_stable(n: int, singles_front: int = 0) -> List[Dict]:
     rows: List[Dict] = []
     remaining = n
 
-    # 1) Einzel quer vorne (0/1/2)
     take = min(max(0, singles_front), 2, remaining)
     for _ in range(take):
         rows.append(euro_row_trans1())
     remaining -= take
 
-    # 2) 2-quer, wenn (rest-2)%3==0
     if remaining >= 2 and (remaining - 2) % 3 == 0:
         rows.append(euro_row_trans2())
         remaining -= 2
 
-    # 3) ggf. Singles zurücknehmen, bis durch 3 teilbar
     while remaining % 3 != 0 and any(r["type"] == "EURO_1_TRANS" for r in rows):
         for i, r in enumerate(rows):
             if r["type"] == "EURO_1_TRANS":
                 rows.pop(i); remaining += 1; break
 
-    # 4) 3-längs auffüllen
     if remaining > 0:
         rows += [euro_row_long() for _ in range(remaining // 3)]
 
-    # 5) Absicherung
     if rows_pallets(rows) != n:
         if n >= 2 and (n - 2) % 3 == 0:
             rows = [euro_row_trans2()] + [euro_row_long() for _ in range((n - 2) // 3)]
@@ -167,7 +155,6 @@ def layout_for_preset_euro_stable(n: int, singles_front: int = 0) -> List[Dict]:
 
     return enforce_tail_no_single(rows, n)
 
-# (Buttons-Variante – nutzt am Ende enforce_tail_no_single)
 def layout_for_preset_euro_buttons(
     n: int,
     front1: bool = False,
@@ -188,102 +175,64 @@ def layout_for_preset_euro_buttons(
         singles_rear = max(0, singles_rear - cut)
         singles_total = singles_front + singles_mid + singles_rear
 
-    # 1) vorne Singles
     take = min(singles_front, remaining)
-    for _ in range(take):
-        rows.append(euro_row_trans1())
+    for _ in range(take): rows.append(euro_row_trans1())
     remaining -= take
 
-    # Reserve für später (mid + rear)
     reserve_after = singles_mid + singles_rear
     usable_for_fill = max(0, remaining - reserve_after)
 
-    # 2) 2-quer wenn danach durch 3 teilbar
     if usable_for_fill >= 2 and (usable_for_fill - 2) % 3 == 0:
         rows.append(euro_row_trans2())
         remaining -= 2
         usable_for_fill -= 2
 
-    # 3) 3-längs auffüllen (Platz für mid/rear reserviert)
     take3 = usable_for_fill // 3
     rows += [euro_row_long() for _ in range(take3)]
     remaining -= take3 * 3
 
-    # 4) mittig Single
     if singles_mid and remaining > 0:
         mid_idx = max(0, min(len(rows), len(rows)//2))
-        rows.insert(mid_idx, euro_row_trans1())
-        remaining -= 1
+        rows.insert(mid_idx, euro_row_trans1()); remaining -= 1
 
-    # 5) hinten Singles (werden ggf. später entfernt wegen Abschlussregel)
     take_rear = min(singles_rear, remaining)
     for _ in range(take_rear):
-        rows.append(euro_row_trans1())
-        remaining -= 1
+        rows.append(euro_row_trans1()); remaining -= 1
 
-    # 6) Falls noch Rest übrig, versuch 2-quer am Anfang
     if remaining == 2 and rows_length_cm(rows) + EURO_W_CM <= TRAILER_LEN_CM:
         rows = [euro_row_trans2()] + rows
-        remaining = 0
     elif remaining > 0:
         return layout_for_preset_euro_stable(n, singles_front=0)
 
-    # 7) Abschlussregel
     return enforce_tail_no_single(rows, n)
 
-# --- NEU: Euro exakt bis hinten (Heck 0 cm, keine Singles im Tail, letzte Reihe voll)
+# --- Euro exakt bis hinten (Heck 0 cm, keine Singles im Tail, letzte Reihe voll)
 def build_euro_exact_tail(n: int) -> List[Dict]:
-    """
-    Baut Euro so, dass die Gesamtlänge exakt 1360 cm ist (Heck 0 cm),
-    keine Singles (EURO_1_TRANS) in den letzten 4 Reihen und letzte Reihe voll.
-    Idee:
-      - s = 34 - n => minimal nötige 1-quer-Anzahl (theoretisch)
-      - Finde a,k >= 0 mit 3a + 2k = n - s und a gerade
-      - Reihen: (ein paar Singles vorne), dann a×3-längs, k×2-quer am Heck,
-        restliche Singles vor die letzten 4 Reihen streuen.
-    """
-    if n <= 0:
-        return []
-
-    s = max(0, 34 - n)      # minimale 1-quer-Menge
+    if n <= 0: return []
+    s = max(0, 34 - n)      # minimale 1-quer
     rem = n - s             # 3a + 2k = rem
     a_max = rem // 3
-    if a_max % 2 == 1:
-        a_max -= 1
+    if a_max % 2 == 1: a_max -= 1
 
     a = -1
-    for cand in range(a_max, -1, -2):   # nur gerade a
+    for cand in range(a_max, -1, -2):
         if (rem - 3*cand) % 2 == 0:
-            a = cand
-            break
+            a = cand; break
     if a < 0:
         return layout_for_preset_euro_stable(n, singles_front=0)
 
-    k = (rem - 3*a) // 2  # 2-quer Anzahl
-
+    k = (rem - 3*a) // 2
     rows: List[Dict] = []
-
-    # Singles vorne: die Hälfte (abrunden)
     s_front = s // 2
     s_tailguard = s - s_front
-    for _ in range(s_front):
-        rows.append(euro_row_trans1())
-
-    # Längsblöcke
+    for _ in range(s_front): rows.append(euro_row_trans1())
     rows += [euro_row_long() for _ in range(a)]
-
-    # 2-quer am Heck
     rows += [euro_row_trans2() for _ in range(k)]
-
-    # Restliche Singles direkt vor die letzten 4 Reihen
     if s_tailguard > 0:
         insert_at = max(0, len(rows) - 4)
         singles = [euro_row_trans1() for _ in range(s_tailguard)]
         rows = rows[:insert_at] + singles + rows[insert_at:]
-
-    # Absicherung
-    rows = enforce_tail_no_single(rows, n)
-    return rows
+    return enforce_tail_no_single(rows, n)
 
 # ------------------ Industrie-Layout (ohne Gewichtsumordnung) ------------------
 def layout_for_preset_industry(n: int) -> List[Dict]:
@@ -291,8 +240,7 @@ def layout_for_preset_industry(n: int) -> List[Dict]:
     rows: List[Dict] = []
     single = n % 2
     full   = n // 2
-    if single:
-        rows.append(ind_single())     # 1 vorne
+    if single: rows.append(ind_single())
     rows += [ind_row2_long() for _ in range(full)]
     return rows
 
@@ -320,8 +268,7 @@ def reorder_rows_heavy(rows: List[Dict],
             taken_idx_e.append(i); need_e -= r.get("pallets", 0)
         elif cat == "IND" and need_i > 0:
             taken_idx_i.append(i); need_i -= r.get("pallets", 0)
-        if need_e <= 0 and need_i <= 0:
-            break
+        if need_e <= 0 and need_i <= 0: break
 
     taken = set(taken_idx_e + taken_idx_i)
     remaining = [r for j, r in enumerate(rows) if j not in taken]
@@ -338,11 +285,9 @@ def reorder_rows_heavy(rows: List[Dict],
 
     return (block + remaining) if side == "front" else (remaining + block)
 
-# ------------------ VERTEILEN (HECKLAST): Reihen auswählen (nur Markierung) ------------------
+# ------------------ VERTEILEN (HECKLAST) ------------------
 def pick_heavy_rows_rear_biased(rows: List[Dict], heavy_total: int) -> Set[int]:
-    if heavy_total <= 0 or not rows:
-        return set()
-
+    if heavy_total <= 0 or not rows: return set()
     N = len(rows)
     scored = []
     for i, r in enumerate(rows):
@@ -351,19 +296,13 @@ def pick_heavy_rows_rear_biased(rows: List[Dict], heavy_total: int) -> Set[int]:
         typ = r.get("type","")
         bonus = 0.08 if ("_1_" in typ or "_2_" in typ or "IND_SINGLE" in typ) else 0.0
         scored.append((i, bias + bonus, r.get("pallets", 0)))
-
     scored.sort(key=lambda t: t[1], reverse=True)
-    picked: Set[int] = set()
-    total = 0
-
-    def neighbors(k: int) -> bool:
-        return (k-1 in picked) or (k+1 in picked)
-
+    picked: Set[int] = set(); total = 0
+    def neighbors(k: int) -> bool: return (k-1 in picked) or (k+1 in picked)
     for idx, _, pal in scored:
         if total >= heavy_total: break
         if neighbors(idx): continue
         picked.add(idx); total += pal
-
     if total < heavy_total:
         for idx, _, pal in scored:
             if total >= heavy_total: break
@@ -371,7 +310,6 @@ def pick_heavy_rows_rear_biased(rows: List[Dict], heavy_total: int) -> Set[int]:
             if ((idx-1 in picked) and (idx-2 in picked)) or ((idx+1 in picked) and (idx+2 in picked)):
                 continue
             picked.add(idx); total += pal
-
     return picked
 
 # ------------------ Grafik (matplotlib) ------------------
@@ -384,109 +322,75 @@ COLOR_IND      = "#ffe2b3"
 EDGE           = "#4a4a4a"
 
 def rows_to_rects(rows: List[Dict]) -> List[Tuple[float,float,float,float,str,str,bool]]:
-    rects = []
-    x = 0
+    rects = []; x = 0
     for r in rows:
         t = r["type"]; L = r["len_cm"]
         if t == "EURO_3_LONG":
-            for lane in range(3):
-                rects.append((x, lane*80, 120, 80, COLOR_EURO_LONG, "EURO", False))
+            for lane in range(3): rects.append((x, lane*80, 120, 80, COLOR_EURO_LONG, "EURO", False))
             x += L
         elif t == "EURO_2_TRANS":
-            for lane in range(2):
-                rects.append((x, lane*120, 80, 120, COLOR_EURO_QUER, "EURO", False))
+            for lane in range(2): rects.append((x, lane*120, 80, 120, COLOR_EURO_QUER, "EURO", False))
             x += L
         elif t == "EURO_1_TRANS":
-            rects.append((x, 60, 80, 120, COLOR_EURO_QUER, "EURO", False))
-            x += L
+            rects.append((x, 60, 80, 120, COLOR_EURO_QUER, "EURO", False)); x += L
         elif t == "IND_ROW_2_LONG":
             rects.append((x, 20, 120, 100, COLOR_IND, "IND", False))
-            rects.append((x,120, 120, 100, COLOR_IND, "IND", False))
-            x += L
+            rects.append((x,120, 120, 100, COLOR_IND, "IND", False)); x += L
         elif t == "IND_SINGLE":
-            rects.append((x, 70, 120, 100, COLOR_IND, "IND", False))
-            x += L
+            rects.append((x, 70, 120, 100, COLOR_IND, "IND", False)); x += L
     return rects
 
 def rows_to_rects_with_row_index(rows: List[Dict]):
-    rects = []
-    meta  = []
-    x = 0
+    rects = []; meta  = []; x = 0
     for i, r in enumerate(rows):
         t = r["type"]; L = r["len_cm"]
         if t == "EURO_3_LONG":
-            for lane in range(3):
-                rects.append((x, lane*80, 120, 80, COLOR_EURO_LONG, "EURO"))
-                meta.append({"row_idx": i, "cat": "EURO"})
+            for lane in range(3): rects.append((x, lane*80, 120, 80, COLOR_EURO_LONG, "EURO")); meta.append({"row_idx": i, "cat": "EURO"})
             x += L
         elif t == "EURO_2_TRANS":
-            for lane in range(2):
-                rects.append((x, lane*120, 80, 120, COLOR_EURO_QUER, "EURO"))
-                meta.append({"row_idx": i, "cat": "EURO"})
+            for lane in range(2): rects.append((x, lane*120, 80, 120, COLOR_EURO_QUER, "EURO")); meta.append({"row_idx": i, "cat": "EURO"})
             x += L
         elif t == "EURO_1_TRANS":
-            rects.append((x, 60, 80, 120, COLOR_EURO_QUER, "EURO"))
-            meta.append({"row_idx": i, "cat": "EURO"})
-            x += L
+            rects.append((x, 60, 80, 120, COLOR_EURO_QUER, "EURO")); meta.append({"row_idx": i, "cat": "EURO"); x += L
         elif t == "IND_ROW_2_LONG":
-            for y0 in (20, 120):
-                rects.append((x, y0, 120, 100, COLOR_IND, "IND"))
-                meta.append({"row_idx": i, "cat": "IND"})
+            for y0 in (20, 120): rects.append((x, y0, 120, 100, COLOR_IND, "IND")); meta.append({"row_idx": i, "cat": "IND"})
             x += L
         elif t == "IND_SINGLE":
-            rects.append((x, 70, 120, 100, COLOR_IND, "IND"))
-            meta.append({"row_idx": i, "cat": "IND"})
-            x += L
+            rects.append((x, 70, 120, 100, COLOR_IND, "IND")); meta.append({"row_idx": i, "cat": "IND"}); x += L
     return rects, meta
 
 def rows_to_rects_with_weights(rows: List[Dict],
                                heavy_euro_count: int = 0, heavy_euro_side: str = "front",
                                heavy_ind_count: int = 0,  heavy_ind_side: str  = "front"):
-    rects = []
-    x = 0
-    euro_rects = []
-    ind_rects  = []
-
+    rects = []; x = 0; euro_rects = []; ind_rects  = []
     for r in cap_to_trailer(rows):
         t = r["type"]; L = r["len_cm"]
         if t == "EURO_3_LONG":
-            for lane in range(3):
-                rects.append((x, lane*80, 120, 80, COLOR_EURO_LONG, "EURO", False))
-                euro_rects.append(len(rects)-1)
+            for lane in range(3): rects.append((x, lane*80, 120, 80, COLOR_EURO_LONG, "EURO", False)); euro_rects.append(len(rects)-1)
             x += L
         elif t == "EURO_2_TRANS":
-            for lane in range(2):
-                rects.append((x, lane*120, 80, 120, COLOR_EURO_QUER, "EURO", False))
-                euro_rects.append(len(rects)-1)
+            for lane in range(2): rects.append((x, lane*120, 80, 120, COLOR_EURO_QUER, "EURO", False)); euro_rects.append(len(rects)-1)
             x += L
         elif t == "EURO_1_TRANS":
-            rects.append((x, 60, 80, 120, COLOR_EURO_QUER, "EURO", False))
-            euro_rects.append(len(rects)-1)
-            x += L
+            rects.append((x, 60, 80, 120, COLOR_EURO_QUER, "EURO", False)); euro_rects.append(len(rects)-1); x += L
         elif t == "IND_ROW_2_LONG":
-            for y0 in (20, 120):
-                rects.append((x, y0, 120, 100, COLOR_IND, "IND", False))
-                ind_rects.append(len(rects)-1)
+            for y0 in (20, 120): rects.append((x, y0, 120, 100, COLOR_IND, "IND", False)); ind_rects.append(len(rects)-1)
             x += L
         elif t == "IND_SINGLE":
-            rects.append((x, 70, 120, 100, COLOR_IND, "IND", False))
-            ind_rects.append(len(rects)-1)
-            x += L
+            rects.append((x, 70, 120, 100, COLOR_IND, "IND", False)); ind_rects.append(len(rects)-1); x += L
 
     euro_cnt = len(euro_rects)
     if heavy_euro_count > 0 and euro_cnt > 0:
         indices = (list(reversed(euro_rects)) if heavy_euro_side == "rear" else euro_rects)[:heavy_euro_count]
         for idx in indices:
-            x0,y0,w0,h0,c0,cat0,_ = rects[idx]
-            rects[idx] = (x0,y0,w0,h0,c0,cat0,True)
+            x0,y0,w0,h0,c0,cat0,_ = rects[idx]; rects[idx] = (x0,y0,w0,h0,c0,cat0,True)
     euro_hvy = sum(1 for i in euro_rects if rects[i][6] is True)
 
     ind_cnt = len(ind_rects)
     if heavy_ind_count > 0 and ind_cnt > 0:
         indices = (list(reversed(ind_rects)) if heavy_ind_side == "rear" else ind_rects)[:heavy_ind_count]
         for idx in indices:
-            x0,y0,w0,h0,c0,cat0,_ = rects[idx]
-            rects[idx] = (x0,y0,w0,h0,c0,cat0,True)
+            x0,y0,w0,h0,c0,cat0,_ = rects[idx]; rects[idx] = (x0,y0,w0,h0,c0,cat0,True)
     ind_hvy = sum(1 for i in ind_rects if rects[i][6] is True)
 
     return rects, euro_cnt, ind_cnt, euro_hvy, ind_hvy
@@ -506,9 +410,7 @@ def draw_graph(title: str,
         euro_hvy = ind_hvy = 0
     elif heavy_rows is not None:
         base, meta = rows_to_rects_with_row_index(cap_to_trailer(rows))
-        rects = []
-        euro_cnt = sum(1 for m in meta if m["cat"]=="EURO")
-        ind_cnt  = sum(1 for m in meta if m["cat"]=="IND")
+        rects = []; euro_cnt = sum(1 for m in meta if m["cat"]=="EURO"); ind_cnt  = sum(1 for m in meta if m["cat"]=="IND")
         euro_hvy = ind_hvy = 0
         for (x,y,w,h,c,cat), m in zip(base, meta):
             hv = (m["row_idx"] in heavy_rows)
@@ -522,8 +424,7 @@ def draw_graph(title: str,
         )
 
     fig, ax = plt.subplots(figsize=figsize)
-    ax.add_patch(Rectangle((0, 0), TRAILER_LEN_CM, TRAILER_W_CM,
-                           fill=False, linewidth=2, edgecolor="#333"))
+    ax.add_patch(Rectangle((0, 0), TRAILER_LEN_CM, TRAILER_W_CM, fill=False, linewidth=2, edgecolor="#333"))
 
     for (x, y, w, h, c, cat, hvy) in rects:
         face = c; edge = "#4a4a4a"; lw = 0.8
@@ -542,11 +443,84 @@ def draw_graph(title: str,
         st.caption(f"Gewicht: gesamt ≈ **{total:.0f} kg**, markiert ≈ **{marked:.0f} kg** "
                    f"(Euro: {euro_cnt}×{kg_euro} kg, Ind.: {ind_cnt}×{kg_ind} kg)")
 
-# ------------------ Sidebar-Schalter ------------------
-st.title("🦊 Paletten Fuchs – Grafik & Gewicht")
+# ------------------ Vordefinierte Varianten (Euro) ------------------
+def _choose_k_for_no_single(n: int, k_max: int) -> int:
+    k_cap = min(k_max, n // 2)
+    want = (3 - (n % 3)) % 3  # k ≡ -n (mod 3)
+    for k in range(k_cap, -1, -1):
+        if k % 3 == want:
+            return k
+    return 0
 
-INLINE_GRID_ON = st.sidebar.toggle("Vier Varianten (2×2) direkt oben", value=False)
-SHOW_TABS      = st.sidebar.toggle("Vergleich (Tabs) anzeigen", value=True)
+def build_euro_all_long(n: int, exact_tail: bool) -> List[Dict]:
+    return build_euro_exact_tail(n) if exact_tail else layout_for_preset_euro_stable(n, singles_front=0)
+
+def build_euro_rear_2trans_block(n: int, approx_block: int, exact_tail: bool) -> List[Dict]:
+    if n <= 0: return []
+    if exact_tail:
+        return build_euro_exact_tail(n)
+    k = _choose_k_for_no_single(n, k_max=max(0, approx_block))
+    rows: List[Dict] = []
+    if k > 0:
+        long_cnt = (n - 2*k) // 3
+        rows += [euro_row_long() for _ in range(long_cnt)]
+        rows += [euro_row_trans2() for _ in range(k)]
+    else:
+        rows = build_euro_all_long(n, exact_tail=False)
+    return enforce_tail_no_single(rows, n)
+
+def build_euro_mixed_periodic(n: int, period: int, exact_tail: bool) -> List[Dict]:
+    if n <= 0: return []
+    if exact_tail:
+        return build_euro_exact_tail(n)
+    approx_k = max(1, n // period)
+    k = _choose_k_for_no_single(n, k_max=approx_k)
+    if k == 0:
+        return build_euro_all_long(n, exact_tail=False)
+    long_cnt = (n - 2*k) // 3
+    rows = [euro_row_long() for _ in range(long_cnt)]
+    out: List[Dict] = []
+    quota = long_cnt / (k + 1)
+    ptr = 0.0; used_k = 0
+    for i in range(long_cnt + k):
+        if used_k < k and (i - ptr) >= quota:
+            out.append(euro_row_trans2()); used_k += 1; ptr += quota
+        else:
+            if long_cnt > 0:
+                out.append(euro_row_long()); long_cnt -= 1
+            else:
+                out.append(euro_row_trans2()); used_k += 1
+    return enforce_tail_no_single(out, n)
+
+def build_euro_alt_pattern(n: int, exact_tail: bool) -> List[Dict]:
+    if n <= 0: return []
+    if exact_tail:
+        return build_euro_exact_tail(n)
+    approx_block = max(1, n // 6)
+    return build_euro_rear_2trans_block(n, approx_block=approx_block, exact_tail=False)
+
+def combine_with_industry(euro_rows: List[Dict], ind_n: int, variant: str) -> List[Dict]:
+    if ind_n <= 0:
+        return euro_rows
+    ind_rows = layout_for_preset_industry(ind_n)
+    if variant in ("A","B","C"):
+        return cap_to_trailer(ind_rows + euro_rows)   # Industrie vorne
+    else:
+        return cap_to_trailer(euro_rows + ind_rows)   # Industrie hinten
+
+def generate_four_variants(euro_n: int, ind_n: int, exact_tail: bool):
+    euro_A = build_euro_all_long(euro_n, exact_tail=exact_tail)
+    euro_B = build_euro_rear_2trans_block(euro_n, approx_block=15, exact_tail=exact_tail)
+    euro_C = build_euro_mixed_periodic(euro_n, period=4, exact_tail=exact_tail)
+    euro_D = build_euro_alt_pattern(euro_n, exact_tail=exact_tail)
+    varA = combine_with_industry(euro_A, ind_n, "A")
+    varB = combine_with_industry(euro_B, ind_n, "B")
+    varC = combine_with_industry(euro_C, ind_n, "C")
+    varD = combine_with_industry(euro_D, ind_n, "D")
+    return varA, varB, varC, varD
+
+# ------------------ Sidebar minimal ------------------
+st.title("🦊 Paletten Fuchs – Grafik & Gewicht")
 
 # ------------------ Clean-Ansicht (oben) ------------------
 st.subheader("Clean-Ansicht (Grafik) – Euro + Industrie")
@@ -566,13 +540,10 @@ with c2:
         btn_all    = st.toggle("Alle aktivieren", value=False,
                                help="Aktiviert 2 vorne, mittig und 2 hinten. Heck bleibt immer voll.")
         btn_rear2  = st.toggle("2 hinten", value=False)
-
     if btn_all:
-        btn_front1 = False
-        btn_front2 = True
+        btn_front1 = False; btn_front2 = True
         btn_mid1   = True
-        btn_rear1  = False
-        btn_rear2  = True
+        btn_rear1  = False; btn_rear2  = True
 
     exact_tail = st.toggle("Exakt bis hinten (Euro)", value=False,
                            help="Euro füllt exakt 1360 cm (Heck 0 cm), keine 1‑quer im Heck (letzte 4 Reihen), letzte Reihe voll.")
@@ -611,7 +582,7 @@ with st.expander("Gewicht & Modus (optional)", expanded=False):
         heavy_total = st.number_input("Gesamtanzahl schwere Paletten", 0, 200, 20, step=1,
                                       help="Euro + Industrie zusammen; werden hecklastig verteilt.")
 
-# 1) Reihen bauen (Euro je nach Schalter) + Abschlussregel
+# 1) Reihen für die Clean-Grafik (Euro je nach Schalter)
 rows_clean: List[Dict] = []
 if euro_n > 0:
     if exact_tail:
@@ -626,7 +597,7 @@ if euro_n > 0:
 if ind_n > 0:
     rows_clean += layout_for_preset_industry(ind_n)
 
-# 2) Gewichtslogik anwenden (Block vs. Verteilen)
+# 2) Gewichtslogik (optional)
 heavy_rows: Optional[Set[int]] = None
 if weight_mode:
     if mode == "Block vorne":
@@ -638,12 +609,9 @@ if weight_mode:
     elif mode == "Verteilen (Hecklast)":
         total_pal = rows_pallets(rows_clean)
         qty = min(heavy_total, total_pal)
-        if qty >= total_pal:
-            heavy_rows = set(range(len(rows_clean)))
-        else:
-            heavy_rows = pick_heavy_rows_rear_biased(rows_clean, qty)
+        heavy_rows = set(range(len(rows_clean))) if qty >= total_pal else pick_heavy_rows_rear_biased(rows_clean, qty)
 
-# 3) Zeichnen
+# 3) Zeichnen Clean
 title = f"Clean: {euro_n} Euro ({'exakt bis hinten' if exact_tail else 'Buttons'}) + {ind_n} Industrie"
 draw_graph(
     title,
@@ -652,175 +620,30 @@ draw_graph(
     weight_mode=weight_mode,
     kg_euro=kg_euro if weight_mode else 0,
     kg_ind=kg_ind if weight_mode else 0,
-    heavy_euro_count=hvy_e if (weight_mode and mode in ("Block vorne","Block hinten")) else 0,
-    heavy_ind_count=hvy_i if (weight_mode and mode in ("Block vorne","Block hinten")) else 0,
-    heavy_side=("rear" if mode=="Block hinten" else "front"),
-    heavy_rows=heavy_rows if (weight_mode and mode=="Verteilen (Hecklast)") else None
+    heavy_euro_count=hvy_e if (weight_mode and mode in ('Block vorne','Block hinten')) else 0,
+    heavy_ind_count=hi if (weight_mode and mode in ('Block vorne','Block hinten')) else 0 if 'hi' in locals() else 0,
+    heavy_side=('rear' if mode=='Block hinten' else 'front'),
+    heavy_rows=heavy_rows if (weight_mode and mode=='Verteilen (Hecklast)') else None
 )
 
-# ------------------ Inline 2×2 Vergleich (optional) ------------------
-def inline_four_variants_grid():
-    st.markdown("#### Vier Varianten (2×2, kompakt)")
-
-    def controls(idx: int):
-        c = st.columns(3)
-        with c[0]:
-            e = st.number_input(f"Euro V{idx}", 0, 40, 0 if idx>1 else 33, step=1, key=f"iv_e{idx}")
-        with c[1]:
-            s = st.slider(f"Einzel V{idx}", 0, 2, 0, key=f"iv_s{idx}")  # (Optional: später auf Buttons umrüstbar)
-        with c[2]:
-            i = st.number_input(f"Industrie V{idx}", 0, 40, 0, step=1, key=f"iv_i{idx}")
-
-        with st.expander(f"Gewicht (optional) V{idx}", expanded=False):
-            m = st.radio(f"Modus V{idx}",
-                         ["Aus", "Block vorne", "Block hinten", "Verteilen (Hecklast)"],
-                         index=0, horizontal=True, key=f"iv_mode{idx}")
-            wm = (m != "Aus")
-            kge = kgi = 0
-            he = hi = 0
-            group_v = True
-            order_v = ("EURO","IND")
-            heavy_total_v = 0
-            if wm:
-                kge = st.number_input(f"kg Euro V{idx}", 0, 2000, 700, step=10, key=f"iv_kge{idx}")
-                kgi = st.number_input(f"kg Ind V{idx}", 0, 2500, 900, step=10, key=f"iv_kgi{idx}")
-                if m in ("Block vorne","Block hinten"):
-                    he  = st.number_input(f"schwere Euro V{idx}", 0, 200, 0, step=1, key=f"iv_he{idx}")
-                    hi  = st.number_input(f"schwere Ind V{idx}", 0, 200, 0, step=1, key=f"iv_hi{idx}")
-                    group_v = st.checkbox("Block nach Typ sortieren", value=True, key=f"iv_group{idx}")
-                    ord_lbl = st.radio("Reihenfolge", ["Euro zuerst","Industrie zuerst"],
-                                       index=0, horizontal=True, key=f"iv_order{idx}")
-                    order_v = ("EURO","IND") if ord_lbl=="Euro zuerst" else ("IND","EURO")
-                else:
-                    heavy_total_v = st.number_input(f"Gesamt schwer V{idx}", 0, 200, 20, step=1, key=f"iv_ht{idx}")
-
-        r: List[Dict] = []
-        if e > 0: r += layout_for_preset_euro_stable(e, singles_front=s)
-        if i > 0: r += layout_for_preset_industry(i)
-
-        heavy_rows_v: Optional[Set[int]] = None
-        if wm:
-            if m == "Block vorne":
-                r = reorder_rows_heavy(r, he, hi, side="front", group_by_type=group_v, type_order=order_v)
-            elif m == "Block hinten":
-                r = reorder_rows_heavy(r, he, hi, side="rear", group_by_type=group_v, type_order=order_v)
-            elif m == "Verteilen (Hecklast)":
-                total_pal_v = rows_pallets(r)
-                qty = min(heavy_total_v, total_pal_v)
-                if qty >= total_pal_v:
-                    heavy_rows_v = set(range(len(r)))
-                else:
-                    heavy_rows_v = pick_heavy_rows_rear_biased(r, qty)
-
-        return r, wm, kge, kgi, he, hi, heavy_rows_v, m
-
-    r1,w1,kge1,kgi1,he1,hi1,hr1,m1 = controls(1)
-    r2,w2,kge2,kgi2,he2,hi2,hr2,m2 = controls(2)
-    r3,w3,kge3,kgi3,he3,hi3,hr3,m3 = controls(3)
-    r4,w4,kge4,kgi4,he4,hi4,hr4,m4 = controls(4)
-
+# 4) EINZIGE 2×2-ANSICHT: vordefinierte Varianten (gekoppelt an die Eingaben)
+show_variants = st.toggle("Vordefinierte Varianten (2×2) anzeigen", value=False,
+                          help="Zeigt 4 praxisnahe Vorschläge basierend auf den obigen Eingaben.")
+if show_variants:
+    vA, vB, vC, vD = generate_four_variants(euro_n, ind_n, exact_tail=exact_tail)
     figsz = (6.6, 1.25)
     row1 = st.columns(2, gap="small")
     with row1[0]:
-        draw_graph("V1", r1, figsize=figsz, weight_mode=w1, kg_euro=kge1, kg_ind=kgi1,
-                   heavy_euro_count=he1 if m1 in ("Block vorne","Block hinten") else 0,
-                   heavy_ind_count=hi1  if m1 in ("Block vorne","Block hinten") else 0,
-                   heavy_side=("rear" if m1=="Block hinten" else "front"),
-                   heavy_rows=hr1 if m1=="Verteilen (Hecklast)" else None)
+        draw_graph("Var A – alles längs", vA, figsize=figsz, weight_mode=False)
     with row1[1]:
-        draw_graph("V2", r2, figsize=figsz, weight_mode=w2, kg_euro=kge2, kg_ind=kgi2,
-                   heavy_euro_count=he2 if m2 in ("Block vorne","Block hinten") else 0,
-                   heavy_ind_count=hi2  if m2 in ("Block vorne","Block hinten") else 0,
-                   heavy_side=("rear" if m2=="Block hinten" else "front"),
-                   heavy_rows=hr2 if m2=="Verteilen (Hecklast)" else None)
-
+        draw_graph("Var B – hinten 2×quer Block", vB, figsize=figsz, weight_mode=False)
     row2 = st.columns(2, gap="small")
     with row2[0]:
-        draw_graph("V3", r3, figsize=figsz, weight_mode=w3, kg_euro=kge3, kg_ind=kgi3,
-                   heavy_euro_count=he3 if m3 in ("Block vorne","Block hinten") else 0,
-                   heavy_ind_count=hi3  if m3 in ("Block vorne","Block hinten") else 0,
-                   heavy_side=("rear" if m3=="Block hinten" else "front"),
-                   heavy_rows=hr3 if m3=="Verteilen (Hecklast)" else None)
+        draw_graph("Var C – gemischt (Periodik)", vC, figsize=figsz, weight_mode=False)
     with row2[1]:
-        draw_graph("V4", r4, figsize=figsz, weight_mode=w4, kg_euro=kge4, kg_ind=kgi4,
-                   heavy_euro_count=he4 if m4 in ("Block vorne","Block hinten") else 0,
-                   heavy_ind_count=hi4  if m4 in ("Block vorne","Block hinten") else 0,
-                   heavy_side=("rear" if m4=="Block hinten" else "front"),
-                   heavy_rows=hr4 if m4=="Verteilen (Hecklast)" else None)
-
-if INLINE_GRID_ON:
-    inline_four_variants_grid()
-
-# ------------------ Vergleich (Tabs) – 4 Varianten (optional) ------------------
-def compare_tabs_four_variants():
-    st.subheader("Vergleich (Tabs) – 4 Varianten")
-
-    labels   = ["Var 1", "Var 2", "Var 3", "Var 4"]
-    defaults = [(33,0,0), (32,2,0), (31,1,0), (24,0,0)]
-    tabs = st.tabs(labels)
-
-    tab_ui(tabs[0], 1, labels[0], defaults[0])
-    tab_ui(tabs[1], 2, labels[1], defaults[1])
-    tab_ui(tabs[2], 3, labels[2], defaults[2])
-    tab_ui(tabs[3], 4, labels[3], defaults[3])
-
-def tab_ui(tab, idx: int, label: str, defaults=(33,0,0)):
-    with tab:
-        e = st.number_input(f"Euro ({label})", 0, 40, defaults[0], step=1, key=f"tv_e_{idx}")
-        s = st.slider      (f"Einzel ({label})", 0, 2, defaults[1],                key=f"tv_s_{idx}")
-        i = st.number_input(f"Industrie ({label})", 0, 40, defaults[2], step=1,    key=f"tv_i_{idx}")
-
-        with st.expander(f"Gewicht ({label})", expanded=False):
-            m  = st.radio(  f"Modus ({label})",
-                            ["Aus","Block vorne","Block hinten","Verteilen (Hecklast)"],
-                            index=0, horizontal=True, key=f"tv_mode_{idx}")
-            wm = (m != "Aus")
-            kge = kgi = 0
-            he = hi = 0
-            group_v = True
-            order_v = ("EURO","IND")
-            heavy_total_v = 0
-            if wm:
-                kge = st.number_input(f"kg Euro ({label})", 0, 2000, 700, step=10, key=f"tv_kge_{idx}")
-                kgi = st.number_input(f"kg Ind ({label})",  0, 2500, 900, step=10, key=f"tv_kgi_{idx}")
-                if m in ("Block vorne","Block hinten"):
-                    he  = st.number_input(f"schwere Euro ({label})", 0, 200, 0, step=1, key=f"tv_he_{idx}")
-                    hi  = st.number_input(f"schwere Ind ({label})",  0, 200, 0, step=1, key=f"tv_hi_{idx}")
-                    group_v = st.checkbox("Block nach Typ sortieren", value=True, key=f"tv_group_{idx}")
-                    ord_lbl = st.radio("Reihenfolge", ["Euro zuerst","Industrie zuerst"],
-                                       index=0, horizontal=True, key=f"tv_order_{idx}")
-                    order_v = ("EURO","IND") if ord_lbl=="Euro zuerst" else ("IND","EURO")
-                else:
-                    heavy_total_v = st.number_input(f"Gesamt schwer ({label})", 0, 200, 20, step=1, key=f"tv_ht_{idx}")
-
-        r: List[Dict] = []
-        if e > 0: r += layout_for_preset_euro_stable(e, singles_front=s)
-        if i > 0: r += layout_for_preset_industry(i)
-
-        heavy_rows_v: Optional[Set[int]] = None
-        if wm:
-            if m == "Block vorne":
-                r = reorder_rows_heavy(r, he, hi, side="front", group_by_type=group_v, type_order=order_v)
-            elif m == "Block hinten":
-                r = reorder_rows_heavy(r, he, hi, side="rear", group_by_type=group_v, type_order=order_v)
-            elif m == "Verteilen (Hecklast)":
-                total_pal_v = rows_pallets(r)
-                qty = min(heavy_total_v, total_pal_v)
-                if qty >= total_pal_v:
-                    heavy_rows_v = set(range(len(r)))
-                else:
-                    heavy_rows_v = pick_heavy_rows_rear_biased(r, qty)
-
-        draw_graph(f"{label}: {e} Euro (S{s}) + {i} Ind.", r,
-                   weight_mode=wm, kg_euro=kge, kg_ind=kgi,
-                   heavy_euro_count=he if m in ("Block vorne","Block hinten") else 0,
-                   heavy_ind_count=hi if m in ("Block vorne","Block hinten") else 0,
-                   heavy_side=("rear" if m=="Block hinten" else "front"),
-                   heavy_rows=heavy_rows_v if m=="Verteilen (Hecklast)" else None)
-
-if SHOW_TABS:
-    compare_tabs_four_variants()
+        draw_graph("Var D – alternative Blockung", vD, figsize=figsz, weight_mode=False)
 
 st.caption("Grafik 1360×240 cm. Grün=Euro längs (120×80), Blau=Euro quer (80×120), Orange=Industrie (120×100). "
            "Tail-Regel: In den letzten 4 Reihen keine Einzel-quer; letzte Reihe immer voll. "
-           "„Exakt bis hinten (Euro)“ füllt 1360 cm ohne Heck-Luft.")
+           "„Exakt bis hinten (Euro)“ füllt 1360 cm ohne Heck-Luft. "
+           "Die 4 Varianten sind an die Eingaben gekoppelt.")
