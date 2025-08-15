@@ -718,7 +718,8 @@ with st.expander("Gewicht & Modus (optional)", expanded=False):
         mode = st.radio("Modus", ["Aus", "Block vorne", "Block hinten", "Verteilen (Hecklast)"],
                         index=0, horizontal=True)
     weight_mode = (mode != "Aus")
-
+all_heavy = st.toggle("Schwer: alle Paletten sind schwer", value=False,
+                      help="Markiert alle Paletten als schwer (unabhängig vom Modus).")
     hvy_e = hvy_i = 0
     group_block = True
     type_order = ("EURO","IND")
@@ -764,7 +765,23 @@ if weight_mode:
         total_pal = rows_pallets(rows_clean_weighted)
         qty = min(heavy_total, total_pal)
         heavy_rows = set(range(len(rows_clean_weighted))) if qty >= total_pal else pick_heavy_rows_rear_biased(rows_clean_weighted, qty)
+# 2) Gewichtslogik anwenden
+heavy_rows: Optional[Set[int]] = None
+if weight_mode:
+    if mode == "Block vorne":
+        rows_clean = reorder_rows_heavy(rows_clean, hvy_e, hvy_i, side="front",
+                                        group_by_type=group_block, type_order=type_order)
+    elif mode == "Block hinten":
+        rows_clean = reorder_rows_heavy(rows_clean, hvy_e, hvy_i, side="rear",
+                                        group_by_type=group_block, type_order=type_order)
+    elif mode == "Verteilen (Hecklast)":
+        total_pal = rows_pallets(rows_clean)
+        qty = min(heavy_total, total_pal)
+        heavy_rows = set(range(len(rows_clean))) if qty >= total_pal else pick_heavy_rows_rear_biased(rows_clean, qty)
 
+    # <<<<<< NEU: All-Heavy überschreibt die Markierung (nach eventuellem Reorder)
+    if all_heavy:
+        heavy_rows = set(range(len(rows_clean)))
 # 3) Zeichnen Clean (ohne/mit Gewicht zur Orientierung)
 title_clean = f"Clean: {euro_n} Euro ({'exakt bis hinten' if exact_tail else 'stabil'}) + {ind_n} Industrie"
 if weight_mode:
