@@ -686,9 +686,14 @@ conf_col1, conf_col2 = st.columns([1,1])
 with conf_col1:
     cfg_file = st.file_uploader("variants.json laden", type=["json"], accept_multiple_files=False)
 with conf_col2:
-    use_default_cfg = st.toggle("Default-Varianten verwenden", value=True if not cfg_file else False)
+    # Wichtig: Wenn Datei hochgeladen ist, standardmäßig NICHT die Defaults verwenden
+    use_default_cfg = st.toggle(
+        "Default-Varianten verwenden",
+        value=(False if cfg_file else True),
+        help="Wenn aktiviert, werden die eingebauten Standard-Varianten verwendet und die hochgeladene JSON ignoriert."
+    )
 
-# Default-Konfig (falls keine Datei geladen) – vier Standardmuster
+# Default-Konfig (falls keine Datei geladen)
 DEFAULT_CFG = {
     "variants": [
         { "title": "Var A – alles längs",         "type": "all_long" },
@@ -699,15 +704,138 @@ DEFAULT_CFG = {
     "industry_position": { "A":"front","B":"front","C":"front","D":"rear" }
 }
 
+cfg_source = "Default"
 if cfg_file and not use_default_cfg:
     try:
         cfg = json.load(cfg_file)
-        st.success("Varianten-Konfiguration geladen.")
+        cfg_source = f"Upload: {getattr(cfg_file, 'name', 'variants.json')}"
+        st.success(f"Varianten-Konfiguration geladen ({cfg_source}).")
     except Exception as e:
-        st.error(f"Konfig konnte nicht gelesen werden: {e}")
+        st.error(f"Konfig konnte nicht gelesen werden: {e} – verwende Default.")
         cfg = DEFAULT_CFG
+        cfg_source = "Default (Fallback)"
 else:
     cfg = DEFAULT_CFG
+
+# Optionales Debugging
+show_cfg_debug = st.checkbox("Konfig-Debug anzeigen", value=False,
+                             help="Zeigt geladene Varianten und Gründe, warum Varianten ggf. gefiltert wurden.")
+
+def _passes_variant_filters(v: dict, euro_n: int, ind_n: int, weight_mode: bool) -> Tuple[bool, str]:
+    # 1) n_exact (exakt Euro-Palettenzahl)
+    if "n_exact" in v:
+        try:
+            if int(v["n_exact"]) != euro_n:
+                return False, f"n_exact={v['n_exact']} passt nicht zu Euro={euro_n}"
+        except Exception:
+            return False, "n_exact ungültig"
+
+    # 2) Min/Max für Euro/Industrie
+    for key, val, cur in [
+        ("euro_min", v.get("euro_min"), euro_n),
+        ("euro_max", v.get("euro_max"), euro_n),
+        ("ind_min",  v.get("ind_min"),  ind_n),
+        ("ind_max",  v.get("ind_max"),  ind_n),
+    ]:
+        if val is not None:
+            try:
+                val_i = int(val)
+            except Exception:
+                return False, f"{key} ungültig"
+            if key.endswith("_min") and cur < val_i:
+                return False, f"{key}={val_i} nicht erfüllt (ist {cur})"
+            if key.endswith("_max") and cur > val_i:
+                return False, f"{key}={val_i} überschritten (ist {cur})"
+
+    # 3) Gewichtspflicht / -verbot
+    if v.get("weight_required") is True and not weight_mode:
+        return False, "weight_required, aber Gewichtsmodus ist AUS"
+    if v.get("weight_forbidden") is True and weight_mode:
+        return False, "weight_forbidden, aber Gewichtsmodus ist AN"
+
+    return True, "ok"
+
+def combine_with_industry_pos(euro_rows: List[Dict], ind_n: int, pos: str) -> List[Dict]:
+    # unverändert aus deiner Version – hier zur Vollständigkeit
+    if ind_n <= 0:
+        return euro_rows
+    ind_rows = layout_for_preset_industry(ind_n)
+    return cap_to_trailer(ind_rows + euro_rows) if pos == "front" else cap_to_trailer(euro_rows + ind_rows)
+
+def build_euro_by_type(t: str, n: int, exact_tail: bool, params: dict) -> List[Dict]:
+    # unverändert aus deiner Version – hier zur Vollständigkeit
+    if t == "all_long":
+        return build_euro_all_long(n, exact_tail=exact_tail)
+    if t == "rear_block":
+        approx = int(params.get("approx_block", 15))
+        return build_euro_rear_2trans_block(n, approx_block=approx, exact_tail=exact_tail)
+    if t == "mixed_periodic":
+        per = int(params.get("period", 4))
+        return build_euro_mixed_periodic(n, period=per, exact_tail=exact_tail)
+    if t == "alt_block":
+        return build_euro_alt_pattern(n, exact_tail=exact_tail)
+    return build_euro_all_long(n, exact_tail=exact_tail)
+
+def generate_variants_from_config(cfg: dict, euro_n: int, ind_n: int, exact_tail: bool, weight_mode: bool):
+    """
+    Erzeugt Varianten aus der JSON-Konfig mit Filterlogik:
+      - n_exact, euro_min/max, ind_min/max
+      - weight_required, weight_forbidden
+      - industry_position pro Variante (oder globales Mapping via industry_position.{Letter})
+    """
+    variants = cfg.get("variants", [])
+    ind_pos_map = cfg.get("industry_position", {})
+    out = []
+    skipped = []  # für Debug
+
+    for idx, v in enumerate(variants):
+        title = v.get("title", f"Var {idx+1}")
+        vtype = v.get("type", "all_long")
+        ok, reason = _passes_variant_filters(v, euro_n, ind_n, weight_mode)
+        if not ok:
+            skipped.append((title, reason))
+            continue
+
+        euro_rows = build_euro_by_type(vtype, euro_n, exact_tail, v)
+
+        # Letter A,B,C,... anhand der Reihenfolge – nur fürs globale industry_position Mapping
+        letter = chr(ord('A') + idx)
+        pos = v.get("industry_position", ind_pos_map.get(letter, "front"))
+        rows = combine_with_industry_pos(euro_rows, ind_n, pos)
+        out.append((title, rows))
+
+    return out, skipped, len(variants)
+
+# 4) Eine 2×2-Ansicht: vordefinierte Varianten aus JSON (gekoppelt an Eingaben)
+show_variants = st.toggle("Vordefinierte Varianten (2×2) anzeigen", value=False,
+                          help="Zeigt Varianten aus der JSON-Konfig basierend auf den obigen Eingaben.")
+if show_variants:
+    variants, skipped, total_cfg = generate_variants_from_config(cfg, euro_n, ind_n,
+                                                                 exact_tail=exact_tail,
+                                                                 weight_mode=weight_mode)
+    st.caption(f"Quelle: **{cfg_source}** – Varianten geladen: {len(variants)}/{total_cfg}")
+
+    figsz = (6.6, 1.25)
+    cols_top = st.columns(2, gap="small")
+    cols_bot = st.columns(2, gap="small")
+    slots = [cols_top[0], cols_top[1], cols_bot[0], cols_bot[1]]
+
+    for i, (title_v, rows_v) in enumerate(variants[:4]):
+        with slots[i]:
+            draw_graph(title_v, rows_v, figsize=figsz, weight_mode=False)
+
+    if len(variants) == 0:
+        st.info("Keine Varianten nach Filterung übrig. Prüfe n_exact / Min/Max / weight_required.")
+    elif len(variants) > 4:
+        st.info(f"In der Konfig sind {len(variants)} Varianten. Es werden die ersten 4 gezeigt.")
+
+    if show_cfg_debug:
+        with st.expander("Debug: Geladene Konfig & verworfene Varianten", expanded=False):
+            st.write("Verworfene Varianten (Grund):")
+            for t, why in skipped:
+                st.write(f"- {t}: {why}")
+            st.write("Roh-Konfig:")
+            st.json(cfg, expanded=False)
 
 # ------------------ Varianten (2×2): IMMER anzeigen & automatisch aktualisieren ------------------
 st.markdown("#### Vordefinierte Varianten (2×2)")
