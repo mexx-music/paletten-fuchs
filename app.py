@@ -351,94 +351,9 @@ def rows_to_rects_with_weights(rows: List[Dict],
     ind_hvy = sum(1 for i in ind_rects if rects[i][6] is True)
 
     return rects, euro_cnt, ind_cnt, euro_hvy, ind_hvy
-# ---------- GROG: Auto-Scorer & Auswahl ----------
-def _has_tail_single(rows: List[Dict]) -> bool:
-    rows = cap_to_trailer(rows)
-    n = len(rows); tail_start = max(0, n - 4)
-    return any(r["type"] == "EURO_1_TRANS" for r in rows[tail_start:])
 
-def _last_row_full(rows: List[Dict]) -> bool:
-    rows = cap_to_trailer(rows)
-    if not rows: return True
-    t = rows[-1]["type"]
-    return t not in ("EURO_1_TRANS", "IND_SINGLE")
-
-def _weight_split_grog(rows: List[Dict], kg_euro: int, kg_ind: int) -> float:
-    """
-    Grobe Hebel-Näherung: Anteil am Heck (0..1). Nutzt rows_to_rects() und Trailerlänge 1360 cm.
-    Falls kg_* == 0, wird 1.0 als Einheit angenommen.
-    """
-    rects = rows_to_rects(cap_to_trailer(rows))
-    if not rects: return 0.5
-    L = float(TRAILER_LEN_CM)
-    W = 0.0
-    M_front = 0.0
-    for (x, y, w, h, color, cat, hv) in rects:
-        wkg = (kg_euro if cat == "EURO" else kg_ind) or 1.0
-        xc = x + w/2.0
-        W += wkg
-        M_front += wkg * xc
-    if W <= 0: return 0.5
-    rear = M_front / L
-    rear_share = max(0.0, min(1.0, rear / W))
-    return rear_share
-
-def score_layout_grog(rows: List[Dict],
-                      kg_euro: int = 0,
-                      kg_ind: int = 0,
-                      target_rear_share: float = 0.52,
-                      w_tail_single: float = 1000.0,
-                      w_last_not_full: float = 80.0,
-                      w_unused_cm: float = 0.6,
-                      w_rear_dev: float = 220.0,
-                      w_switch: float = 3.5) -> float:
-    """
-    Kleiner = besser.
-    - harte Strafe für Singles im Tail (letzte 4 Reihen)
-    - Strafe wenn letzte Reihe nicht voll
-    - Strafe pro cm ungenutzte Länge
-    - quadratische Strafe für Abweichung vom Ziel-Heckanteil
-    - leichte Strafe je Längs/Quer-Wechsel
-    """
-    rows = cap_to_trailer(rows)
-    s = 0.0
-    if _has_tail_single(rows): s += w_tail_single
-    if not _last_row_full(rows): s += w_last_not_full
-    unused = max(0, TRAILER_LEN_CM - rows_length_cm(rows))
-    s += w_unused_cm * unused
-    rear_share = _weight_split_grog(rows, kg_euro, kg_ind)
-    dev = rear_share - target_rear_share
-    s += w_rear_dev * (dev * dev)
-    def is_long(tp): return tp == "EURO_3_LONG" or tp.startswith("IND_ROW_2")
-    def is_qu(tp):  return tp in ("EURO_2_TRANS", "EURO_1_TRANS")
-    switches = sum(1 for a, b in zip(rows, rows[1:])
-                   if ("Q" if is_qu(a["type"]) else "L") != ("Q" if is_qu(b["type"]) else "L"))
-    s += w_switch * switches
-    return s
-
-def grog_pick_best(variants: List[Tuple[str, List[Dict]]],
-                   kg_euro: int,
-                   kg_ind: int,
-                   target_rear_share: float,
-                   topk: int = 4) -> List[Tuple[str, List[Dict], float, float]]:
-    """
-    Bewertet (Titel, Rows) -> gibt Top-K mit Score & gemessenem Heck-Anteil zurück.
-    """
-    scored = []
-    for title, rows in variants:
-        sc = score_layout_grog(rows, kg_euro=kg_euro, kg_ind=kg_ind,
-                               target_rear_share=target_rear_share)
-        rear = _weight_split_grog(rows, kg_euro, kg_ind)
-        scored.append((title, rows, sc, rear))
-    scored.sort(key=lambda t: t[2])
-    return scored[:topk]
 # ---- Achslast-Schätzung (grob, Stützen an x=0 und x=1360) ----
 def estimate_axle_loads(rows: List[Dict], kg_euro: int, kg_ind: int) -> Tuple[float, float, float]:
-    """
-    Hebelmodell: Reaktionen an Front (x=0) und Rear (x=L).
-    Wir verwenden Rechteckmittelpunkte als Angriffspunkte.
-    Rückgabe: (front_kg, rear_kg, total_kg)
-    """
     if kg_euro <= 0 and kg_ind <= 0:
         return (0.0, 0.0, 0.0)
     rects = rows_to_rects(cap_to_trailer(rows))
@@ -525,6 +440,73 @@ def draw_graph(title: str,
         else:
             st.caption(axl)
 
+# ---------- GROG: Auto-Scorer & Auswahl ----------
+def _has_tail_single(rows: List[Dict]) -> bool:
+    rows = cap_to_trailer(rows)
+    n = len(rows); tail_start = max(0, n - 4)
+    return any(r["type"] == "EURO_1_TRANS" for r in rows[tail_start:])
+
+def _last_row_full(rows: List[Dict]) -> bool:
+    rows = cap_to_trailer(rows)
+    if not rows: return True
+    t = rows[-1]["type"]
+    return t not in ("EURO_1_TRANS", "IND_SINGLE")
+
+def _weight_split_grog(rows: List[Dict], kg_euro: int, kg_ind: int) -> float:
+    rects = rows_to_rects(cap_to_trailer(rows))
+    if not rects: return 0.5
+    L = float(TRAILER_LEN_CM)
+    W = 0.0
+    M_front = 0.0
+    for (x, y, w, h, color, cat, hv) in rects:
+        wkg = (kg_euro if cat == "EURO" else kg_ind) or 1.0
+        xc = x + w/2.0
+        W += wkg
+        M_front += wkg * xc
+    if W <= 0: return 0.5
+    rear = M_front / L
+    rear_share = max(0.0, min(1.0, rear / W))
+    return rear_share
+
+def score_layout_grog(rows: List[Dict],
+                      kg_euro: int = 0,
+                      kg_ind: int = 0,
+                      target_rear_share: float = 0.52,
+                      w_tail_single: float = 1000.0,
+                      w_last_not_full: float = 80.0,
+                      w_unused_cm: float = 0.6,
+                      w_rear_dev: float = 220.0,
+                      w_switch: float = 3.5) -> float:
+    rows = cap_to_trailer(rows)
+    s = 0.0
+    if _has_tail_single(rows): s += w_tail_single
+    if not _last_row_full(rows): s += w_last_not_full
+    unused = max(0, TRAILER_LEN_CM - rows_length_cm(rows))
+    s += w_unused_cm * unused
+    rear_share = _weight_split_grog(rows, kg_euro, kg_ind)
+    dev = rear_share - target_rear_share
+    s += w_rear_dev * (dev * dev)
+    def is_long(tp): return tp == "EURO_3_LONG" or tp.startswith("IND_ROW_2")
+    def is_qu(tp):  return tp in ("EURO_2_TRANS", "EURO_1_TRANS")
+    switches = sum(1 for a, b in zip(rows, rows[1:])
+                   if ("Q" if is_qu(a["type"]) else "L") != ("Q" if is_qu(b["type"]) else "L"))
+    s += w_switch * switches
+    return s
+
+def grog_pick_best(variants: List[Tuple[str, List[Dict]]],
+                   kg_euro: int,
+                   kg_ind: int,
+                   target_rear_share: float,
+                   topk: int = 4) -> List[Tuple[str, List[Dict], float, float]]:
+    scored = []
+    for title, rows in variants:
+        sc = score_layout_grog(rows, kg_euro=kg_euro, kg_ind=kg_ind,
+                               target_rear_share=target_rear_share)
+        rear = _weight_split_grog(rows, kg_euro, kg_ind)
+        scored.append((title, rows, sc, rear))
+    scored.sort(key=lambda t: t[2])
+    return scored[:topk]
+
 # ------------------ Vordefinierte Varianten (Euro) + neue Typen ------------------
 def _choose_k_for_no_single(n: int, k_max: int) -> int:
     k_cap = min(k_max, n // 2)
@@ -574,7 +556,6 @@ def build_euro_alt_pattern(n: int, exact_tail: bool) -> List[Dict]:
 
 # --- NEU: recipe / heavy_auto_rear / light_auto_mix ---
 def build_euro_recipe(rowspec: list) -> List[Dict]:
-    """rowspec: Liste 1/2/3 (1=1 quer, 2=2 quer, 3=3 längs), Front→Heck."""
     rows: List[Dict] = []
     for r in rowspec:
         if r == 3: rows.append(euro_row_long())
@@ -583,7 +564,6 @@ def build_euro_recipe(rowspec: list) -> List[Dict]:
     return enforce_tail_no_single(rows, sum(rowspec))
 
 def build_euro_heavy_auto_rear(n: int, exact_tail: bool, params: dict) -> List[Dict]:
-    """Hecklastige schwere Auto-Variante: wählt einen sinnvollen 2×quer-Blockanteil für das Heck."""
     if n <= 0: return []
     if exact_tail: return build_euro_exact_tail(n)
     target_share = float(params.get("target_rear_share", 0.42))
@@ -598,7 +578,6 @@ def build_euro_heavy_auto_rear(n: int, exact_tail: bool, params: dict) -> List[D
     return enforce_tail_no_single(rows, n)
 
 def build_euro_light_auto_mix(n: int, exact_tail: bool, params: dict) -> List[Dict]:
-    """Leichte Mischung: periodische 2×quer dazwischenstreuen (period=3..6 typisch)."""
     if n <= 0: return []
     period = int(params.get("period", 4))
     return build_euro_mixed_periodic(n, period=period, exact_tail=exact_tail)
@@ -639,7 +618,7 @@ def _passes_variant_filters(v: dict, euro_n: int, ind_n: int, weight_mode: bool)
         except Exception:
             return False, "n_exact ungültig"
 
-    # 2) Min/Max für Euro/Industrie (optional)
+    # 2) Min/Max für Euro/Industrie
     for key, val, cur in [
         ("euro_min", v.get("euro_min"), euro_n),
         ("euro_max", v.get("euro_max"), euro_n),
@@ -664,35 +643,22 @@ def _passes_variant_filters(v: dict, euro_n: int, ind_n: int, weight_mode: bool)
 
     return True, "ok"
 
-def generate_variants_from_config(cfg: dict, euro_n: int, ind_n: int, exact_tail: bool, weight_mode: bool):
-    """
-    Erzeugt Varianten aus der JSON-Konfig mit Filterlogik:
-      - n_exact, euro_min/max, ind_min/max
-      - weight_required, weight_forbidden
-      - industry_position pro Variante (oder globales Mapping via industry_position.{Letter})
-    Rückgabe: (varianten_liste, skipped_list, total_cfg_count)
-    """
+def generate_variants_from_config(cfg: dict, euro_n: int, ind_n: int, exact_tail: bool, weight_mode: bool=False):
     variants = cfg.get("variants", [])
     ind_pos_map = cfg.get("industry_position", {})
     out = []
-    skipped = []  # für Debug
-
+    skipped = []
     for idx, v in enumerate(variants):
+        ok, why = _passes_variant_filters(v, euro_n, ind_n, weight_mode)
         title = v.get("title", f"Var {idx+1}")
-        vtype = v.get("type", "all_long")
-        ok, reason = _passes_variant_filters(v, euro_n, ind_n, weight_mode)
         if not ok:
-            skipped.append((title, reason))
-            continue
-
+            skipped.append((title, why)); continue
+        vtype = v.get("type", "all_long")
         euro_rows = build_euro_by_type(vtype, euro_n, exact_tail, v)
-
-        # Letter A,B,C,... anhand der Reihenfolge – nur fürs globale industry_position Mapping
-        letter = chr(ord('A') + idx)
+        letter = chr(ord('A') + idx)  # A,B,C,...
         pos = v.get("industry_position", ind_pos_map.get(letter, "front"))
         rows = combine_with_industry_pos(euro_rows, ind_n, pos)
         out.append((title, rows))
-
     return out, skipped, len(variants)
 
 # ------------------ UI ------------------
@@ -718,8 +684,11 @@ with st.expander("Gewicht & Modus (optional)", expanded=False):
         mode = st.radio("Modus", ["Aus", "Block vorne", "Block hinten", "Verteilen (Hecklast)"],
                         index=0, horizontal=True)
     weight_mode = (mode != "Aus")
-all_heavy = st.toggle("Schwer: alle Paletten sind schwer", value=False,
-                      help="Markiert alle Paletten als schwer (unabhängig vom Modus).")
+
+    # << NEU: All-Heavy-Button
+    all_heavy = st.toggle("Schwer: alle Paletten sind schwer", value=False,
+                          help="Markiert alle Paletten als schwer (unabhängig vom Modus).")
+
     hvy_e = hvy_i = 0
     group_block = True
     type_order = ("EURO","IND")
@@ -751,63 +720,51 @@ if euro_n > 0:
 if ind_n > 0:
     rows_clean += layout_for_preset_industry(ind_n)
 
-# 2) Gewichtslogik anwenden (nur für Clean-Vorschau)
+# 2) Gewichtslogik anwenden (Clean-Vorschau)
 heavy_rows: Optional[Set[int]] = None
 rows_clean_weighted = list(rows_clean)
 if weight_mode:
     if mode == "Block vorne":
-        rows_clean_weighted = reorder_rows_heavy(rows_clean_weighted, hvy_e, hvy_i, side="front",
-                                                 group_by_type=group_block, type_order=type_order)
+        rows_clean_weighted = reorder_rows_heavy(
+            rows_clean_weighted, hvy_e, hvy_i, side="front",
+            group_by_type=group_block, type_order=type_order
+        )
     elif mode == "Block hinten":
-        rows_clean_weighted = reorder_rows_heavy(rows_clean_weighted, hvy_e, hvy_i, side="rear",
-                                                 group_by_type=group_block, type_order=type_order)
+        rows_clean_weighted = reorder_rows_heavy(
+            rows_clean_weighted, hvy_e, hvy_i, side="rear",
+            group_by_type=group_block, type_order=type_order
+        )
     elif mode == "Verteilen (Hecklast)":
         total_pal = rows_pallets(rows_clean_weighted)
         qty = min(heavy_total, total_pal)
-        heavy_rows = set(range(len(rows_clean_weighted))) if qty >= total_pal else pick_heavy_rows_rear_biased(rows_clean_weighted, qty)
-# 2) Gewichtslogik anwenden
-heavy_rows: Optional[Set[int]] = None
-if weight_mode:
-    if mode == "Block vorne":
-        rows_clean = reorder_rows_heavy(rows_clean, hvy_e, hvy_i, side="front",
-                                        group_by_type=group_block, type_order=type_order)
-    elif mode == "Block hinten":
-        rows_clean = reorder_rows_heavy(rows_clean, hvy_e, hvy_i, side="rear",
-                                        group_by_type=group_block, type_order=type_order)
-    elif mode == "Verteilen (Hecklast)":
-        total_pal = rows_pallets(rows_clean)
-        qty = min(heavy_total, total_pal)
-        heavy_rows = set(range(len(rows_clean))) if qty >= total_pal else pick_heavy_rows_rear_biased(rows_clean, qty)
+        if all_heavy:
+            heavy_rows = set(range(len(rows_clean_weighted)))  # Alle schwer
+        else:
+            heavy_rows = (
+                set(range(len(rows_clean_weighted)))
+                if qty >= total_pal
+                else pick_heavy_rows_rear_biased(rows_clean_weighted, qty)
+            )
+    # All-Heavy auch in Block-Modi markieren
+    if all_heavy and mode in ("Block vorne", "Block hinten"):
+        heavy_rows = set(range(len(rows_clean_weighted)))
 
-    # <<<<<< NEU: All-Heavy überschreibt die Markierung (nach eventuellem Reorder)
-    if all_heavy:
-        heavy_rows = set(range(len(rows_clean)))
-# 3) Zeichnen Clean (ohne/mit Gewicht zur Orientierung)
+# 3) Zeichnen Clean (einheitlich)
 title_clean = f"Clean: {euro_n} Euro ({'exakt bis hinten' if exact_tail else 'stabil'}) + {ind_n} Industrie"
-if weight_mode:
-    draw_graph(
-        title_clean + " – (Gewichtsansicht)",
-        rows_clean_weighted,
-        figsize=(8, 1.7),
-        weight_mode=True,
-        kg_euro=kg_euro,
-        kg_ind=kg_ind,
-        heavy_euro_count=hvy_e if mode in ('Block vorne','Block hinten') else 0,
-        heavy_ind_count=hvy_i if mode in ('Block vorne','Block hinten') else 0,
-        heavy_side=('rear' if mode=='Block hinten' else 'front'),
-        heavy_rows=heavy_rows if mode=='Verteilen (Hecklast)' else None,
-        show_axle_note=True
-    )
-else:
-    draw_graph(
-        title_clean,
-        rows_clean,
-        figsize=(8, 1.7),
-        weight_mode=False,
-        kg_euro=kg_euro,
-        kg_ind=kg_ind,
-        show_axle_note=True
-    )
+draw_graph(
+    title_clean + (" – (Gewichtsansicht)" if weight_mode else ""),
+    rows_clean_weighted if weight_mode else rows_clean,
+    figsize=(8, 1.7),
+    weight_mode=weight_mode,
+    kg_euro=kg_euro if weight_mode else 0,
+    kg_ind=kg_ind if weight_mode else 0,
+    heavy_euro_count=hvy_e if (weight_mode and mode in ('Block vorne','Block hinten')) else 0,
+    heavy_ind_count=hvy_i if (weight_mode and mode in ('Block vorne','Block hinten')) else 0,
+    heavy_side=('rear' if mode=='Block hinten' else 'front'),
+    # WICHTIG: heavy_rows gilt in allen Gewichtsmodi
+    heavy_rows=heavy_rows if weight_mode else None,
+    show_axle_note=True
+)
 
 # ------------------ Varianten-Konfiguration (JSON) ------------------
 st.markdown("##### Varianten-Konfiguration")
@@ -815,7 +772,6 @@ conf_col1, conf_col2 = st.columns([1,1])
 with conf_col1:
     cfg_file = st.file_uploader("variants.json laden", type=["json"], accept_multiple_files=False)
 with conf_col2:
-    # Wichtig: Wenn Datei hochgeladen ist, standardmäßig NICHT die Defaults verwenden
     use_default_cfg = st.toggle(
         "Default-Varianten verwenden",
         value=(False if cfg_file else True),
@@ -850,7 +806,7 @@ else:
 show_cfg_debug = st.checkbox("Konfig-Debug anzeigen", value=False,
                              help="Zeigt geladene Varianten und Gründe, warum Varianten ggf. gefiltert wurden.")
 
-# 4) Varianten: togglebare 2×2-Ansicht (gekoppelt an Eingaben)
+# 4) Eine 2×2-Ansicht: vordefinierte Varianten aus JSON (gekoppelt an Eingaben)
 show_variants = st.toggle("Vordefinierte Varianten (2×2) anzeigen", value=False,
                           help="Zeigt Varianten aus der JSON-Konfig basierend auf den obigen Eingaben.")
 if show_variants:
@@ -880,13 +836,14 @@ if show_variants:
                 st.write(f"- {t}: {why}")
             st.write("Roh-Konfig:")
             st.json(cfg, expanded=False)
+
 # ---- Auto-Bestenliste (GROG) ----
 st.markdown("#### Auto‑Bestenliste (Grog)")
 auto_on = st.toggle("Grog aktivieren", value=True,
                     help="Bewertet alle Varianten automatisch und zeigt die besten an.")
 target_rear = st.slider("Ziel‑Heckanteil (%)", 40, 65, 52, step=1) / 100.0
 
-all_variants = generate_variants_from_config(cfg, euro_n, ind_n, exact_tail=exact_tail)
+all_variants, _sk, _tot = generate_variants_from_config(cfg, euro_n, ind_n, exact_tail=exact_tail, weight_mode=False)
 if auto_on and all_variants:
     picked = grog_pick_best(all_variants, kg_euro=kg_euro, kg_ind=kg_ind,
                             target_rear_share=target_rear, topk=4)
@@ -902,9 +859,10 @@ if auto_on and all_variants:
                        figsize=figsz, weight_mode=False)
 elif auto_on and not all_variants:
     st.info("Keine Varianten vorhanden.")
+
 # ------------------ Varianten (2×2): IMMER anzeigen & automatisch aktualisieren ------------------
 st.markdown("#### Vordefinierte Varianten (2×2)")
-variants_plain, _sk, _tot = generate_variants_from_config(
+variants_plain, _sk2, _tot2 = generate_variants_from_config(
     cfg, euro_n, ind_n, exact_tail=exact_tail, weight_mode=False
 )
 
@@ -924,7 +882,7 @@ elif len(variants_plain) > 4:
 
 # ===== Zusatz-Grid: Nur wenn Gewicht aktiv ist -> bevorzugt Heavy-Varianten aus JSON =====
 if weight_mode:
-    variants_heavy, _sk2, _tot2 = generate_variants_from_config(
+    variants_heavy, _sk3, _tot3 = generate_variants_from_config(
         cfg, euro_n, ind_n, exact_tail=exact_tail, weight_mode=True
     )
     if len(variants_heavy) == 0:
@@ -938,6 +896,7 @@ if weight_mode:
     for i, (title_v, rows_v) in enumerate(variants_heavy[:4]):
         with slots_w[i]:
             if mode in ("Block vorne", "Block hinten"):
+                heavy_rows_v = set(range(len(rows_v))) if all_heavy else None
                 draw_graph(
                     f"{title_v} – {'Block hinten' if mode=='Block hinten' else 'Block vorne'}",
                     rows_v,
@@ -948,16 +907,16 @@ if weight_mode:
                     heavy_euro_count=hvy_e,
                     heavy_ind_count=hvy_i,
                     heavy_side=("rear" if mode=="Block hinten" else "front"),
-                    heavy_rows=None,
+                    heavy_rows=heavy_rows_v,
                     show_axle_note=True
                 )
             elif mode == "Verteilen (Hecklast)":
                 total_pal_v = rows_pallets(rows_v)
                 qty = min(heavy_total, total_pal_v)
-                if qty >= total_pal_v:
+                if all_heavy:
                     heavy_rows_v = set(range(len(rows_v)))
                 else:
-                    heavy_rows_v = pick_heavy_rows_rear_biased(rows_v, qty)
+                    heavy_rows_v = set(range(len(rows_v))) if qty >= total_pal_v else pick_heavy_rows_rear_biased(rows_v, qty)
                 draw_graph(
                     f"{title_v} – Verteilen (hecklastig)",
                     rows_v,
