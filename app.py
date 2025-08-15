@@ -351,7 +351,87 @@ def rows_to_rects_with_weights(rows: List[Dict],
     ind_hvy = sum(1 for i in ind_rects if rects[i][6] is True)
 
     return rects, euro_cnt, ind_cnt, euro_hvy, ind_hvy
+# ---------- GROG: Auto-Scorer & Auswahl ----------
+def _has_tail_single(rows: List[Dict]) -> bool:
+    rows = cap_to_trailer(rows)
+    n = len(rows); tail_start = max(0, n - 4)
+    return any(r["type"] == "EURO_1_TRANS" for r in rows[tail_start:])
 
+def _last_row_full(rows: List[Dict]) -> bool:
+    rows = cap_to_trailer(rows)
+    if not rows: return True
+    t = rows[-1]["type"]
+    return t not in ("EURO_1_TRANS", "IND_SINGLE")
+
+def _weight_split_grog(rows: List[Dict], kg_euro: int, kg_ind: int) -> float:
+    """
+    Grobe Hebel-Näherung: Anteil am Heck (0..1). Nutzt rows_to_rects() und Trailerlänge 1360 cm.
+    Falls kg_* == 0, wird 1.0 als Einheit angenommen.
+    """
+    rects = rows_to_rects(cap_to_trailer(rows))
+    if not rects: return 0.5
+    L = float(TRAILER_LEN_CM)
+    W = 0.0
+    M_front = 0.0
+    for (x, y, w, h, color, cat, hv) in rects:
+        wkg = (kg_euro if cat == "EURO" else kg_ind) or 1.0
+        xc = x + w/2.0
+        W += wkg
+        M_front += wkg * xc
+    if W <= 0: return 0.5
+    rear = M_front / L
+    rear_share = max(0.0, min(1.0, rear / W))
+    return rear_share
+
+def score_layout_grog(rows: List[Dict],
+                      kg_euro: int = 0,
+                      kg_ind: int = 0,
+                      target_rear_share: float = 0.52,
+                      w_tail_single: float = 1000.0,
+                      w_last_not_full: float = 80.0,
+                      w_unused_cm: float = 0.6,
+                      w_rear_dev: float = 220.0,
+                      w_switch: float = 3.5) -> float:
+    """
+    Kleiner = besser.
+    - harte Strafe für Singles im Tail (letzte 4 Reihen)
+    - Strafe wenn letzte Reihe nicht voll
+    - Strafe pro cm ungenutzte Länge
+    - quadratische Strafe für Abweichung vom Ziel-Heckanteil
+    - leichte Strafe je Längs/Quer-Wechsel
+    """
+    rows = cap_to_trailer(rows)
+    s = 0.0
+    if _has_tail_single(rows): s += w_tail_single
+    if not _last_row_full(rows): s += w_last_not_full
+    unused = max(0, TRAILER_LEN_CM - rows_length_cm(rows))
+    s += w_unused_cm * unused
+    rear_share = _weight_split_grog(rows, kg_euro, kg_ind)
+    dev = rear_share - target_rear_share
+    s += w_rear_dev * (dev * dev)
+    def is_long(tp): return tp == "EURO_3_LONG" or tp.startswith("IND_ROW_2")
+    def is_qu(tp):  return tp in ("EURO_2_TRANS", "EURO_1_TRANS")
+    switches = sum(1 for a, b in zip(rows, rows[1:])
+                   if ("Q" if is_qu(a["type"]) else "L") != ("Q" if is_qu(b["type"]) else "L"))
+    s += w_switch * switches
+    return s
+
+def grog_pick_best(variants: List[Tuple[str, List[Dict]]],
+                   kg_euro: int,
+                   kg_ind: int,
+                   target_rear_share: float,
+                   topk: int = 4) -> List[Tuple[str, List[Dict], float, float]]:
+    """
+    Bewertet (Titel, Rows) -> gibt Top-K mit Score & gemessenem Heck-Anteil zurück.
+    """
+    scored = []
+    for title, rows in variants:
+        sc = score_layout_grog(rows, kg_euro=kg_euro, kg_ind=kg_ind,
+                               target_rear_share=target_rear_share)
+        rear = _weight_split_grog(rows, kg_euro, kg_ind)
+        scored.append((title, rows, sc, rear))
+    scored.sort(key=lambda t: t[2])
+    return scored[:topk]
 # ---- Achslast-Schätzung (grob, Stützen an x=0 und x=1360) ----
 def estimate_axle_loads(rows: List[Dict], kg_euro: int, kg_ind: int) -> Tuple[float, float, float]:
     """
@@ -783,7 +863,28 @@ if show_variants:
                 st.write(f"- {t}: {why}")
             st.write("Roh-Konfig:")
             st.json(cfg, expanded=False)
+# ---- Auto-Bestenliste (GROG) ----
+st.markdown("#### Auto‑Bestenliste (Grog)")
+auto_on = st.toggle("Grog aktivieren", value=True,
+                    help="Bewertet alle Varianten automatisch und zeigt die besten an.")
+target_rear = st.slider("Ziel‑Heckanteil (%)", 40, 65, 52, step=1) / 100.0
 
+all_variants = generate_variants_from_config(cfg, euro_n, ind_n, exact_tail=exact_tail)
+if auto_on and all_variants:
+    picked = grog_pick_best(all_variants, kg_euro=kg_euro, kg_ind=kg_ind,
+                            target_rear_share=target_rear, topk=4)
+
+    figsz = (6.6, 1.25)
+    cols_top = st.columns(2, gap="small")
+    cols_bot = st.columns(2, gap="small")
+    slots = [cols_top[0], cols_top[1], cols_bot[0], cols_bot[1]]
+
+    for i, (title_v, rows_v, sc, rear) in enumerate(picked):
+        with slots[i]:
+            draw_graph(f"{title_v} – Score {sc:.1f} – Heck {rear*100:.0f}%", rows_v,
+                       figsize=figsz, weight_mode=False)
+elif auto_on and not all_variants:
+    st.info("Keine Varianten vorhanden.")
 # ------------------ Varianten (2×2): IMMER anzeigen & automatisch aktualisieren ------------------
 st.markdown("#### Vordefinierte Varianten (2×2)")
 variants_plain, _sk, _tot = generate_variants_from_config(
