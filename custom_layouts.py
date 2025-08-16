@@ -5,6 +5,7 @@ import json
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
 from PIL import Image, ImageDraw
+import numpy as np  # <--- NEU: NumPy importiert
 
 # --- Trailer & Raster (cm / px Skalierung) ---
 TRAILER_INNER_LEN_CM = 1360
@@ -31,7 +32,7 @@ class LayoutItem:
     y_cm: int
     w_cm: int
     h_cm: int
-    typ: str  # "Euro 120×80" | "Industrie 120×100" | "Custom"
+    typ: str
 
 @dataclass
 class Meta:
@@ -46,8 +47,8 @@ class Preset:
     meta: Meta
     layout: List[LayoutItem]
 
-# --- Keys im Session State (kollisionsfrei halten) ---
-SS = "pf_custom"  # Namespace
+# --- Keys im Session State ---
+SS = "pf_custom"
 
 def _ensure_state():
     if SS not in st.session_state:
@@ -133,14 +134,11 @@ def _preset_from_dict(d: Dict[str, Any]) -> Preset:
 
 # --- Öffentliche API ---
 def render_manager(title: str = "Eigene Layouts (Vers 1–4)", show_expander: bool = True) -> List[LayoutItem]:
-    """
-    Rendert den kompletten Manager (Canvas + Vers 1–4 + Import/Export).
-    Rückgabe: aktuelles Layout in cm (Liste von LayoutItem).
-    """
     s = _ensure_state()
     container = st.expander(title, expanded=False) if show_expander else st.container()
     with container:
         top_l, top_m, top_r = st.columns([3,2,2])
+
         with top_m:
             st.subheader("Meta / Schnell-Setzer")
             with st.form("pf_meta_form", clear_on_submit=False):
@@ -180,12 +178,15 @@ def render_manager(title: str = "Eigene Layouts (Vers 1–4)", show_expander: bo
             snap = st.toggle("Snapping", value=True, key="pf_snap")
             clear_canvas = st.button("Canvas leeren", key="pf_clear")
 
+            # FIX: PIL → NumPy konvertieren
             bg = _grid_background(CANVAS_W, CANVAS_H, int(GRID_CM * SCALE / GRID_CM)) if show_grid else None
+            bg_np = np.array(bg) if bg is not None else None
+
             canvas_result = st_canvas(
                 fill_color="rgba(0, 0, 0, 0)",
                 stroke_width=2, stroke_color="#333333",
-                background_color="#FFFFFF" if bg is None else None,
-                background_image=bg,
+                background_color="#FFFFFF" if bg_np is None else None,
+                background_image=bg_np,
                 update_streamlit=True,
                 height=CANVAS_H, width=CANVAS_W,
                 drawing_mode="transform",
@@ -254,12 +255,11 @@ def render_manager(title: str = "Eigene Layouts (Vers 1–4)", show_expander: bo
         for c, n in zip(cols, slot_names):
             ui_slot(c, n)
 
-        # Aktuelles Layout ausgeben (für App-Logik)
         layout_cm = _placed_from_canvas_json(s["canvas_data"], snap=True)
         st.caption("Aktuelles Layout (cm, für App-Logik):")
         st.write([asdict(x) for x in layout_cm])
 
-    return layout_cm  # <- wichtig für die Haupt-App
+    return layout_cm
 
 def get_active_meta() -> Meta:
     s = _ensure_state()
