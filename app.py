@@ -15,7 +15,21 @@ import json
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import re
-
+st.download_button(
+    "Presets (Canvas) exportieren",
+    data=export_all_presets_json(),
+    file_name="palettenfuchs_presets.json",
+    mime="application/json",
+    key="presets_export_btn_top"  # <<< NEU
+)
+# … an anderer Stelle …
+st.download_button(
+    "Presets (Canvas) exportieren",
+    data=export_all_presets_json(),
+    file_name="palettenfuchs_presets.json",
+    mime="application/json",
+    key="presets_export_btn_bottom"  # <<< anderer key
+)
 st.set_page_config(page_title="Paletten Fuchs – Grafik & Gewicht", layout="centered")
 
 # ===================== 3) Canvas-Manager (nur Presets) =====================
