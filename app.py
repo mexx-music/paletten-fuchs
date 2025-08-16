@@ -1,3 +1,4 @@
+
 # app.py — Paletten Fuchs 9.4 (erweitert, FIXED)
 # - Clean-Ansicht (Euro/Industrie + "Exakt bis hinten")
 # - Varianten (2×2) IMMER sichtbar, gekoppelt an die Eingaben oben
@@ -7,7 +8,7 @@
 # - Gewicht: Block vorne/hinten, Verteilen (Hecklast), All-Heavy
 # - BONUS: Bei aktivem Gewicht zusätzliches 2×2 mit Gewichts-Logik
 # - Achslast-Schätzung (grob): Front/Rear basierend auf Hebelmodell (Stützen an den Enden des 1360-cm-Rahmens)
-
+from custom_layouts import render_manager, get_active_meta
 from typing import List, Dict, Optional, Tuple, Set
 import streamlit as st
 import json
