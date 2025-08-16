@@ -1,4 +1,4 @@
-# custom_layouts.py — Paletten Fuchs 9.5 (Fixgrößen + Buttons)
+# custom_layouts.py — Paletten Fuchs 9.5 (Fixgrößen + Ausrichten + Fixieren)
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 import streamlit as st
@@ -56,7 +56,7 @@ def _fabric_rect(x: int, y: int, w: int, h: int, label: str) -> Dict[str, Any]:
         "type": "rect",
         "left": x, "top": y,
         "width": w, "height": h,
-        "fill": "rgba(0,0,0,0)",   # transparent; Farbe machen wir in app.py-Grafik
+        "fill": "rgba(0,0,0,0)",   # transparent; Farbe macht app.py-Grafik
         "stroke": "#222222", "strokeWidth": 2,
         "angle": 0,
         "selectable": True,
@@ -67,7 +67,6 @@ def _fabric_rect(x: int, y: int, w: int, h: int, label: str) -> Dict[str, Any]:
         "lockUniScaling": True,
         "lockRotation": False,
         "name": label,             # eigene Kennung
-        # fabric erwartet evtl. scaleX/scaleY; auf 1 setzen
         "scaleX": 1, "scaleY": 1,
     }
 
@@ -84,7 +83,7 @@ def _add_fixed_rect(kind: str):
     else:
         return
 
-    # Simple Auto-Positionierung in Zeilen (ohne Überlappung – grob)
+    # Simple Auto-Positionierung in Zeilen (grob, ohne Kollisionsprüfung)
     idx = st.session_state[_SS_NEXT_POS_IDX]
     gap = 8
     per_row = max(1, TRAILER_LEN_CM // (w + gap))
@@ -146,9 +145,34 @@ def _json_to_items(json_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         if r: out.append(r)
     return out
 
+# ---------- Ausrichten ----------
+def _align(scope: str, pos: str):
+    """Ausrichten quer über Trailer-Breite: 'left' (0), 'center', 'right' (TRAILER_W - h)."""
+    _ensure_session()
+    objs = st.session_state[_SS_CANVAS_OBJS]
+    if not objs: 
+        return
+    targets = []
+    if scope == "last":
+        targets = [len(objs)-1]
+    else:
+        targets = list(range(len(objs)))
+
+    for i in targets:
+        o = dict(objs[i])  # copy
+        h = int(round((o.get("height") or 0) * (o.get("scaleY") or 1)))
+        if pos == "left":
+            top = 0
+        elif pos == "center":
+            top = max(0, (TRAILER_W_CM - h) // 2)
+        else:  # right
+            top = max(0, TRAILER_W_CM - h)
+        o["top"] = top
+        objs[i] = o
+
 # ---------- Canvas-Manager ----------
 def render_manager(title: str = "Eigene Layouts (Vers 1–4)", show_expander: bool = True) -> List[Dict[str, Any]]:
-    """Canvas mit Fixgrößen-Buttons. Bewegen erlaubt, Skalieren gesperrt. 1 px = 1 cm."""
+    """Canvas mit Fixgrößen-Buttons + Ausrichten + Fixieren (⏎). Bewegen erlaubt, Skalieren gesperrt."""
     _ensure_session()
     items: List[Dict[str, Any]] = []
 
@@ -160,8 +184,8 @@ def render_manager(title: str = "Eigene Layouts (Vers 1–4)", show_expander: bo
 
         st.caption("Füge Paletten mit den Buttons hinzu (fixe Größe). Bewegen erlaubt, Skalieren gesperrt.")
 
-        # Button-Leiste
-        b1, b2, b3, b4, b5 = st.columns([1,1,1,1,1])
+        # Button-Leiste (Hinzufügen/Löschen)
+        b1, b2, b3, b4, b5, b6 = st.columns([1,1,1,1,1,1])
         with b1:
             if st.button("➕ Euro längs (120×80)", use_container_width=True):
                 _add_fixed_rect("EURO_LONG")
@@ -177,6 +201,23 @@ def render_manager(title: str = "Eigene Layouts (Vers 1–4)", show_expander: bo
         with b5:
             if st.button("✖ Alles löschen", use_container_width=True):
                 _delete_all()
+        with b6:
+            # Entspricht "Enter": erzwingt Re-Run und speichert aktuelle Positionen
+            if st.button("⏎ Fixieren", use_container_width=True):
+                pass  # Re-Run reicht, der State wird unten übernommen
+
+        # Ausrichten (Scope + Richtung)
+        scope = st.radio("Ausrichten für …", ["zuletzt", "alle"], horizontal=True, index=0)
+        s_left, s_center, s_right = st.columns(3)
+        with s_left:
+            if st.button("⟸ Links", use_container_width=True):
+                _align("last" if scope=="zuletzt" else "all", "left")
+        with s_center:
+            if st.button("◎ Mitte", use_container_width=True):
+                _align("last" if scope=="zuletzt" else "all", "center")
+        with s_right:
+            if st.button("⟹ Rechts", use_container_width=True):
+                _align("last" if scope=="zuletzt" else "all", "right")
 
         # Initial-Drawing aus Session-Objekten
         initial_json = {
@@ -203,13 +244,11 @@ def render_manager(title: str = "Eigene Layouts (Vers 1–4)", show_expander: bo
         # Rückdaten übernehmen (Positionen), Größen wieder auf Fixwerte clampen
         if canvas_result and canvas_result.json_data:
             new_objs = canvas_result.json_data.get("objects") or []
-            # wir übernehmen neue left/top, erzwingen aber wieder Fixgrößen & Locks
             fixed_objs: List[Dict[str, Any]] = []
             for o in new_objs:
                 r = _normalize_rect(o)
-                if not r: 
+                if not r:
                     continue
-                # zurück in fabric-Objekt (Fixgröße + Locks)
                 fab = _fabric_rect(r["x_cm"], r["y_cm"], r["w_cm"], r["h_cm"], r["typ"])
                 fixed_objs.append(fab)
             st.session_state[_SS_CANVAS_OBJS] = fixed_objs
