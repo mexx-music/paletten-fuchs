@@ -1,4 +1,3 @@
-
 # app.py — Paletten Fuchs 9.4 (erweitert, FIXED)
 # - Clean-Ansicht (Euro/Industrie + "Exakt bis hinten")
 # - Varianten (2×2) IMMER sichtbar, gekoppelt an die Eingaben oben
@@ -8,7 +7,7 @@
 # - Gewicht: Block vorne/hinten, Verteilen (Hecklast), All-Heavy
 # - BONUS: Bei aktivem Gewicht zusätzliches 2×2 mit Gewichts-Logik
 # - Achslast-Schätzung (grob): Front/Rear basierend auf Hebelmodell (Stützen an den Enden des 1360-cm-Rahmens)
-from custom_layouts import render_manager, get_active_meta
+from custom_layouts import render_manager, get_active_meta, export_all_presets_json
 from typing import List, Dict, Optional, Tuple, Set
 import streamlit as st
 import json
@@ -17,10 +16,46 @@ from matplotlib.patches import Rectangle
 
 st.set_page_config(page_title="Paletten Fuchs – Grafik & Gewicht", layout="centered")
 
-# ------------------ Geometrie / Konstanten ------------------
+# ===================== 3) Canvas-Manager (Vers 1–4) =====================
+# Der Expander lässt Nutzer frei platzieren/speichern/laden.
+user_layout_cm = render_manager(title="Eigene Layouts (Vers 1–4)", show_expander=True)
+user_meta = get_active_meta()
+use_user_layout = len(user_layout_cm) > 0
+
+# ===================== 4) Helper: Canvas-Layout zeichnen =================
 TRAILER_LEN_CM = 1360
 TRAILER_W_CM   = 240
 
+def _draw_trailer_frame(ax):
+    ax.add_patch(Rectangle((0, 0), TRAILER_LEN_CM, TRAILER_W_CM,
+                           fill=False, linewidth=2, edgecolor="#333"))
+    ax.set_xlim(0, TRAILER_LEN_CM)
+    ax.set_ylim(0, TRAILER_W_CM)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+def draw_canvas_layout(title: str, items: List[Dict], figsize: Tuple[float,float]=(8,1.7)):
+    """Zeichnet frei platzierte Paletten (cm-Koordinaten) aus dem Canvas."""
+    fig, ax = plt.subplots(figsize=figsize)
+    _draw_trailer_frame(ax)
+    for it in items:
+        x, y = float(it["x_cm"]), float(it["y_cm"])
+        w, h = float(it["w_cm"]), float(it["h_cm"])
+        typ = it.get("typ", "")
+        # Farblogik an Farben deiner Clean-Grafik angelehnt:
+        if "Euro" in typ and (w==120 or h==120) and (w==80 or h==80):
+            # Euro: längs oder quer – leichte Farbvariante
+            face = "#d9f2d9" if (w==120 and h==80) else "#cfe8ff"
+        elif "Industrie" in typ and (w==120 or h==120) and (w==100 or h==100):
+            face = "#ffe2b3"
+        else:
+            face = "#bbbbbb"  # Custom
+        ax.add_patch(Rectangle((x, y), w, h, facecolor=face, edgecolor="#4a4a4a", linewidth=0.9))
+    ax.set_title(title, fontsize=12, pad=6)
+    st.pyplot(fig)
+    plt.close(fig)
+
+# ------------------ Geometrie / Konstanten ------------------
 EURO_L_CM, EURO_W_CM = 120, 80
 IND_L_CM,  IND_W_CM  = 120, 100
 
@@ -560,54 +595,6 @@ def build_euro_by_type(t: str, n: int, exact_tail: bool, params: dict) -> List[D
     if t == "alt_block":       return build_euro_alt_pattern(n, exact_tail=exact_tail)
     return build_euro_all_long(n, exact_tail=exact_tail)
 
-# ------------------ JSON-Filter & Variantenerzeugung ------------------
-def _passes_variant_filters(v: dict, euro_n: int, ind_n: int, weight_mode: bool) -> Tuple[bool, str]:
-    if "n_exact" in v:
-        try:
-            if int(v["n_exact"]) != euro_n:
-                return False, f"n_exact={v['n_exact']} passt nicht zu Euro={euro_n}"
-        except Exception:
-            return False, "n_exact ungültig"
-
-    for key, val, cur in [
-        ("euro_min", v.get("euro_min"), euro_n),
-        ("euro_max", v.get("euro_max"), euro_n),
-        ("ind_min",  v.get("ind_min"),  ind_n),
-        ("ind_max",  v.get("ind_max"),  ind_n),
-    ]:
-        if val is not None:
-            try:
-                val_i = int(val)
-            except Exception:
-                return False, f"{key} ungültig"
-            if key.endswith("_min") and cur < val_i: return False, f"{key}={val_i} nicht erfüllt (ist {cur})"
-            if key.endswith("_max") and cur > val_i: return False, f"{key}={val_i} überschritten (ist {cur})"
-
-    if v.get("weight_required") is True and not weight_mode:
-        return False, "weight_required, aber Gewichtsmodus ist AUS"
-    if v.get("weight_forbidden") is True and weight_mode:
-        return False, "weight_forbidden, aber Gewichtsmodus ist AN"
-
-    return True, "ok"
-
-def generate_variants_from_config(cfg: dict, euro_n: int, ind_n: int, exact_tail: bool, weight_mode: bool=False):
-    variants = cfg.get("variants", [])
-    ind_pos_map = cfg.get("industry_position", {})
-    out = []
-    skipped = []
-    for idx, v in enumerate(variants):
-        ok, why = _passes_variant_filters(v, euro_n, ind_n, weight_mode)
-        title = v.get("title", f"Var {idx+1}")
-        if not ok:
-            skipped.append((title, why)); continue
-        vtype = v.get("type", "all_long")
-        euro_rows = build_euro_by_type(vtype, euro_n, exact_tail, v)
-        letter = chr(ord('A') + idx)
-        pos = v.get("industry_position", ind_pos_map.get(letter, "front"))
-        rows = combine_with_industry_pos(euro_rows, ind_n, pos)
-        out.append((title, rows))
-    return out, skipped, len(variants)
-
 # ------------------ UI ------------------
 st.title("🦊 Paletten Fuchs – Grafik & Gewicht")
 st.subheader("Clean-Ansicht (Grafik) – Euro + Industrie")
@@ -619,7 +606,7 @@ with c3:
     ind_n = st.number_input("Industrie-Paletten", 0, 40, 0, step=1)
 
 exact_tail = st.toggle("Exakt bis hinten (Euro)", value=False,
-                       help="Euro füllt exakt 1360 cm (Heck 0 cm), keine 1‑quer im Heck (letzte 4 Reihen), letzte Reihe voll.")
+                       help="Euro füllt exakt 1360 cm (Heck 0 cm), keine 1-quer im Heck (letzte 4 Reihen), letzte Reihe voll.")
 
 with st.expander("Gewicht & Modus (optional)", expanded=False):
     colw = st.columns([1.2,1.2,1.6])
@@ -657,17 +644,28 @@ with st.expander("Gewicht & Modus (optional)", expanded=False):
         heavy_total = st.number_input("Gesamtanzahl schwere Paletten", 0, 200, 20, step=1,
                                       help="Euro + Industrie zusammen; werden hecklastig verteilt.")
 
-# 1) Clean-Reihen aufbauen
-rows_clean: List[Dict] = []
-if euro_n > 0:
-    rows_clean += (build_euro_exact_tail(euro_n) if exact_tail else layout_for_preset_euro_stable(euro_n, singles_front=0))
-if ind_n > 0:
-    rows_clean += layout_for_preset_industry(ind_n)
+# ===================== 5) Clean-Aufbau mit Canvas-Weiche =====================
+def layout_items_to_grid(items):
+    """Gibt Canvas-Items unverändert als 'grid' zurück (für Unicode/Infos)."""
+    return [{
+        "x_cm": it["x_cm"], "y_cm": it["y_cm"],
+        "w_cm": it["w_cm"], "h_cm": it["h_cm"],
+        "typ":  it["typ"]
+    } for it in items]
 
-# 2) Gewichtslogik anwenden (Clean-Vorschau)
+if use_user_layout:
+    rows_clean: List[Dict] = []  # Algorithmus wird übersprungen
+else:
+    rows_clean: List[Dict] = []
+    if euro_n > 0:
+        rows_clean += (build_euro_exact_tail(euro_n) if exact_tail else layout_for_preset_euro_stable(euro_n, singles_front=0))
+    if ind_n > 0:
+        rows_clean += layout_for_preset_industry(ind_n)
+
+# 2) Gewichtslogik anwenden (nur wenn NICHT Canvas aktiv ist)
 heavy_rows: Optional[Set[int]] = None
 rows_clean_weighted = list(rows_clean)
-if weight_mode:
+if (not use_user_layout) and weight_mode:
     if mode == "Block vorne":
         rows_clean_weighted = reorder_rows_heavy(
             rows_clean_weighted, hvy_e, hvy_i, side="front",
@@ -689,21 +687,52 @@ if weight_mode:
     if all_heavy and mode in ("Block vorne", "Block hinten"):
         heavy_rows = set(range(len(rows_clean_weighted)))
 
-# 3) Zeichnen Clean
-title_clean = f"Clean: {euro_n} Euro ({'exakt bis hinten' if exact_tail else 'stabil'}) + {ind_n} Industrie"
-draw_graph(
-    title_clean + (" – (Gewichtsansicht)" if weight_mode else ""),
-    rows_clean_weighted if weight_mode else rows_clean,
-    figsize=(8, 1.7),
-    weight_mode=weight_mode,
-    kg_euro=kg_euro if weight_mode else 0,
-    kg_ind=kg_ind if weight_mode else 0,
-    heavy_euro_count=hvy_e if (weight_mode and mode in ('Block vorne','Block hinten')) else 0,
-    heavy_ind_count=hvy_i if (weight_mode and mode in ('Block vorne','Block hinten')) else 0,
-    heavy_side=('rear' if mode=='Block hinten' else 'front'),
-    heavy_rows=heavy_rows if weight_mode else None,
-    show_axle_note=True
-)
+# ===================== 6) Zeichnen (Canvas oder Clean) =====================
+if use_user_layout:
+    # Info zu Stückzahl aus Canvas (8)
+    total_from_canvas = sum(1 for it in user_layout_cm if "Euro" in it["typ"] or "Industrie" in it["typ"])
+    st.info(f"Canvas aktiv: {total_from_canvas} Paletten erkannt – Meta: {user_meta.name} · total={user_meta.total_pal}, heavy={user_meta.heavy_count}")
+
+    # Optionaler Unicode-Plan (nur bei Canvas sinnvoll)
+    with st.expander("Unicode-Plan (Canvas)", expanded=False):
+        import math
+        TRAILER_W_CM_UNI = 246  # für die Unicode-Darstellung großzügiger, wie besprochen
+        CELL_CM = 20
+        cols = math.ceil(TRAILER_LEN_CM / CELL_CM)
+        rows = math.ceil(TRAILER_W_CM_UNI / CELL_CM)
+        grid = [["·" for _ in range(cols)] for __ in range(rows)]
+        def cm_to_cells(v): return max(1, round(v / CELL_CM))
+        for it in user_layout_cm:
+            x = cm_to_cells(it["x_cm"])
+            y = cm_to_cells(it["y_cm"])
+            w = cm_to_cells(it["w_cm"])
+            h = cm_to_cells(it["h_cm"])
+            ch = "▭" if "Euro" in it["typ"] else ("▮" if "Industrie" in it["typ"] else "■")
+            x = min(max(1, x), cols); y = min(max(1, y), rows)
+            w = max(1, min(w, cols - x + 1)); h = max(1, min(h, rows - y + 1))
+            for r in range(y-1, y-1+h):
+                for c in range(x-1, x-1+w):
+                    grid[r][c] = ch
+        st.text("\n".join("".join(row) for row in grid))
+
+    # Hauptgrafik aus Canvas
+    draw_canvas_layout("Canvas: Benutzerdefiniertes Layout", user_layout_cm, figsize=(8, 1.7))
+else:
+    # 3) Zeichnen Clean (dein Originalpfad)
+    title_clean = f"Clean: {euro_n} Euro ({'exakt bis hinten' if exact_tail else 'stabil'}) + {ind_n} Industrie"
+    draw_graph(
+        title_clean + (" – (Gewichtsansicht)" if weight_mode else ""),
+        rows_clean_weighted if weight_mode else rows_clean,
+        figsize=(8, 1.7),
+        weight_mode=weight_mode,
+        kg_euro=kg_euro if weight_mode else 0,
+        kg_ind=kg_ind if weight_mode else 0,
+        heavy_euro_count=hvy_e if (weight_mode and mode in ('Block vorne','Block hinten')) else 0,
+        heavy_ind_count=hvy_i if (weight_mode and mode in ('Block vorne','Block hinten')) else 0,
+        heavy_side=('rear' if mode=='Block hinten' else 'front'),
+        heavy_rows=heavy_rows if weight_mode else None,
+        show_axle_note=True
+    )
 
 # ------------------ Varianten-Konfiguration (JSON) ------------------
 st.markdown("##### Varianten-Konfiguration")
@@ -770,10 +799,10 @@ if show_variants:
             st.write("Roh-Konfig:"); st.json(cfg, expanded=False)
 
 # ---- Auto-Bestenliste (GROG) ----
-st.markdown("#### Auto‑Bestenliste (Grog)")
+st.markdown("#### Auto-Bestenliste (Grog)")
 auto_on = st.toggle("Grog aktivieren", value=True,
                     help="Bewertet alle Varianten automatisch und zeigt die besten an.")
-target_rear = st.slider("Ziel‑Heckanteil (%)", 40, 65, 52, step=1) / 100.0
+target_rear = st.slider("Ziel-Heckanteil (%)", 40, 65, 52, step=1) / 100.0
 
 all_variants, _sk, _tot = generate_variants_from_config(cfg, euro_n, ind_n, exact_tail=exact_tail, weight_mode=False)
 if auto_on and all_variants:
@@ -855,10 +884,18 @@ if weight_mode:
                     show_axle_note=True
                 )
 
+# ===================== 7) Presets-Export (außerhalb des Expanders) =====================
+st.download_button(
+    "Presets (Canvas) exportieren",
+    data=export_all_presets_json(),
+    file_name="palettenfuchs_presets.json",
+    mime="application/json"
+)
+
 st.caption(
-    "Grafik 1360×240 cm. Grün=Euro längs (120×80), Blau=Euro quer (80×120), Orange=Industrie (120×100). "
+    "Grafik 1360×240 cm. Grün=Euro längs (120×80), Blau=Euro quer (80×120), Orange=Industrie (120×100). "
     "Tail-Regel: In den letzten 4 Reihen keine Einzel-quer; letzte Reihe immer voll. "
-    "„Exakt bis hinten (Euro)“ füllt 1360 cm ohne Heck-Luft. "
+    "„Exakt bis hinten (Euro)“ füllt 1360 cm ohne Heck-Luft. "
     "Varianten erweiterbar per JSON; Typen: all_long, rear_block, mixed_periodic, alt_block, "
     "recipe (rows: 1/2/3), heavy_auto_rear, light_auto_mix. "
     "Filter: n_exact / n_min / n_max / weight_required / weight_forbidden (+ euro_min/max, ind_min/max). "
