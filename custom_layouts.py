@@ -1,9 +1,8 @@
-# custom_layouts.py — Presets-Editor (Auto-Snap, stabil, echt fixierbar)
+# custom_layouts.py — Presets-Editor (persistente IDs, Auto-Snap, stabile Positionen)
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 import streamlit as st
 
-# Drawable-Canvas
 try:
     from streamlit_drawable_canvas import st_canvas
     _HAS_CANVAS = True
@@ -20,21 +19,25 @@ class UserMeta:
     total_pal: int = 0
     heavy_count: int = 0
 
-# Session Keys
-_SS_PRESETS   = "pf_presets"
-_SS_META      = "pf_last_meta"
-_SS_OBJS      = "pf_canvas_objs"     # Quelle der Wahrheit (persistiert)
-_SS_NEXT_IDX  = "pf_next_pos_idx"
-_SS_LOCKED    = "pf_locked"          # True => gesperrt
-_SS_SNAP_CM   = "pf_snap_cm"         # Raster (cm)
+# Session keys
+_SS_PRESETS  = "pf_presets"
+_SS_META     = "pf_last_meta"
+_SS_OBJS     = "pf_canvas_objs"   # Liste von fabric-Objekten mit pfid
+_SS_NEXTIDX  = "pf_next_pos_idx"
+_SS_NEXTPID  = "pf_next_pid"      # fortlaufende, persistente Palette-ID
+_SS_LOCKED   = "pf_locked"
+_SS_SNAP_X   = "pf_snap_x"        # Raster cm für X
+_SS_SNAP_Y   = "pf_snap_y_mode"   # "auto_lmr" | "grid" (Default: auto_lmr)
 
 def _ensure():
     if _SS_PRESETS not in st.session_state: st.session_state[_SS_PRESETS] = []
     if _SS_META not in st.session_state:    st.session_state[_SS_META]    = UserMeta()
     if _SS_OBJS not in st.session_state:    st.session_state[_SS_OBJS]    = []
-    if _SS_NEXT_IDX not in st.session_state:st.session_state[_SS_NEXT_IDX]= 0
+    if _SS_NEXTIDX not in st.session_state: st.session_state[_SS_NEXTIDX] = 0
+    if _SS_NEXTPID not in st.session_state: st.session_state[_SS_NEXTPID] = 1
     if _SS_LOCKED not in st.session_state:  st.session_state[_SS_LOCKED]  = False
-    if _SS_SNAP_CM not in st.session_state: st.session_state[_SS_SNAP_CM] = 10
+    if _SS_SNAP_X not in st.session_state:  st.session_state[_SS_SNAP_X]  = 10
+    if _SS_SNAP_Y not in st.session_state:  st.session_state[_SS_SNAP_Y]  = "auto_lmr"
 
 def get_active_meta() -> UserMeta:
     _ensure()
@@ -48,23 +51,41 @@ def export_all_presets_json() -> bytes:
     except Exception:
         return b"[]"
 
-# ---------- Utils ----------
-def _snap(v: int, step: int) -> int:
+# ---------------- Utils & Snap ----------------
+def _snap_grid(v: int, step: int) -> int:
     if step <= 1: return int(v)
     return int(round(v / step) * step)
 
-def _clamp(v: int, lo: int, hi: int) -> int:
-    return max(lo, min(hi, v))
+def _fix_size(name: str, w: int, h: int) -> (int,int):
+    if name == "Euro":
+        return (80,120) if w < h else (120,80)
+    if name == "Industrie":
+        return (120,100)
+    return (w,h)
 
-def _apply_snap_xy(x: int, y: int, w: int, h: int, step: int) -> (int,int):
-    x = _clamp(_snap(x, step), 0, max(0, TRAILER_LEN_CM - w))
-    y = _clamp(_snap(y, step), 0, max(0, TRAILER_W_CM  - h))
+def _snap_xy(name: str, x: int, y: int, w: int, h: int, step_x: int, y_mode: str) -> (int,int):
+    # X: Raster
+    x = max(0, min(TRAILER_LEN_CM - w, _snap_grid(x, step_x)))
+    # Y: L/M/R oder Grid
+    if y_mode == "grid":
+        y = _snap_grid(y, step_x)
+        y = max(0, min(TRAILER_W_CM - h, y))
+    else:
+        # auto_lmr -> setze auf nächstgelegene der drei Bahnen
+        y_left  = 0
+        y_mid   = (TRAILER_W_CM - h) // 2
+        y_right = TRAILER_W_CM - h
+        # Abstand zu den drei Kandidaten
+        dy = [(abs(y - y_left), y_left), (abs(y - y_mid), y_mid), (abs(y - y_right), y_right)]
+        y = min(dy, key=lambda t: t[0])[1]
     return x, y
 
-# ---------- Fabric Helpers ----------
-def _fabric_rect(x: int, y: int, w: int, h: int, label: str, selectable: bool) -> Dict[str, Any]:
+# ---------------- Fabric Helpers ----------------
+def _fabric_rect(pfid: int, x: int, y: int, w: int, h: int, label: str, selectable: bool) -> Dict[str, Any]:
+    # Wir speichern unsere ID als "pfid" am Objekt → bleibt in fabric.json erhalten
     return {
         "type": "rect",
+        "pfid": pfid,
         "left": x, "top": y,
         "width": w, "height": h,
         "fill": "rgba(0,0,0,0)",
@@ -75,41 +96,9 @@ def _fabric_rect(x: int, y: int, w: int, h: int, label: str, selectable: bool) -
         "hasControls": False,
         "lockScalingX": True, "lockScalingY": True, "lockUniScaling": True,
         "lockRotation": True,
-        "name": label,          # "Euro" | "Industrie"
+        "name": label,  # "Euro" | "Industrie"
         "scaleX": 1, "scaleY": 1,
     }
-
-def _fix_size(name: str, w: int, h: int) -> (int,int):
-    if name == "Euro":
-        return (80,120) if w < h else (120,80)
-    if name == "Industrie":
-        return (120,100)
-    return (w,h)
-
-# ---------- State Mutators ----------
-def _commit_from_canvas(json_data: Optional[Dict[str, Any]]):
-    """Auto-Übernahme + Snap des *aktuellen* Canvas-Stands bei jedem Rerun."""
-    _ensure()
-    if st.session_state[_SS_LOCKED]:   # gesperrt => nicht übernehmen
-        return
-    if not json_data:
-        return
-    step = st.session_state[_SS_SNAP_CM]
-    new_objs: List[Dict[str, Any]] = []
-    for o in (json_data.get("objects") or []):
-        if not isinstance(o, dict) or o.get("type") != "rect":
-            continue
-        name = o.get("name") or "Custom"
-        w = int(round((o.get("width") or 0)  * (o.get("scaleX") or 1)))
-        h = int(round((o.get("height") or 0) * (o.get("scaleY") or 1)))
-        w,h = _fix_size(name, w, h)
-        x = int(round(o.get("left") or 0))
-        y = int(round(o.get("top")  or 0))
-        x,y = _apply_snap_xy(x, y, w, h, step)   # <<< Auto-Snap IMMER
-        new_objs.append(_fabric_rect(x, y, w, h, name, selectable=True))
-    # Nur ersetzen, wenn wir wirklich Daten bekommen haben
-    if new_objs:
-        st.session_state[_SS_OBJS] = new_objs
 
 def _add(kind: str):
     _ensure()
@@ -118,35 +107,67 @@ def _add(kind: str):
     elif kind == "EURO_TRANS": w,h,name = 80,120,"Euro"
     elif kind == "IND": w,h,name = 120,100,"Industrie"
     else: return
-    idx  = st.session_state[_SS_NEXT_IDX]
-    gap  = 8
-    per  = max(1, TRAILER_LEN_CM // (w + gap))
+    idx = st.session_state[_SS_NEXTIDX]
+    gap = 8
+    per = max(1, TRAILER_LEN_CM // (w + gap))
     row, col = idx // per, idx % per
-    x = min(TRAILER_LEN_CM - w, 10 + col*(w+gap))
-    y = min(TRAILER_W_CM  - h, 10 + row*(max(100,h)+gap))
-    x,y = _apply_snap_xy(x, y, w, h, st.session_state[_SS_SNAP_CM])
-    st.session_state[_SS_OBJS].append(_fabric_rect(x,y,w,h,name, selectable=True))
-    st.session_state[_SS_NEXT_IDX] += 1
+    x = min(TRAILER_LEN_CM - w, 10 + col * (w + gap))
+    y = min(TRAILER_W_CM  - h, 10 + row * (max(100, h) + gap))
+    x,y = _snap_xy(name, x, y, w, h, st.session_state[_SS_SNAP_X], st.session_state[_SS_SNAP_Y])
+    pfid = st.session_state[_SS_NEXTPID]; st.session_state[_SS_NEXTPID] += 1
+    st.session_state[_SS_OBJS].append(_fabric_rect(pfid, x, y, w, h, name, selectable=True))
+    st.session_state[_SS_NEXTIDX] += 1
 
 def _delete_last():
     _ensure()
     if st.session_state[_SS_LOCKED]: return
     if st.session_state[_SS_OBJS]:
         st.session_state[_SS_OBJS].pop()
-        st.session_state[_SS_NEXT_IDX] = max(0, st.session_state[_SS_NEXT_IDX]-1)
+        st.session_state[_SS_NEXTIDX] = max(0, st.session_state[_SS_NEXTIDX]-1)
 
 def _delete_all():
     _ensure()
     if st.session_state[_SS_LOCKED]: return
     st.session_state[_SS_OBJS] = []
-    st.session_state[_SS_NEXT_IDX] = 0
+    st.session_state[_SS_NEXTIDX] = 0
 
+# ---------------- Persistente Übernahme (kein Springen) ----------------
+def _commit_from_canvas(json_data: Optional[Dict[str, Any]]):
+    """Übernimmt den aktuellen Canvas-Stand stabil: match per pfid, snap koordiniert, Reihenfolge bleibt."""
+    _ensure()
+    if st.session_state[_SS_LOCKED] or not json_data:
+        return
+    by_id = {o.get("pfid"): o for o in (json_data.get("objects") or []) if isinstance(o, dict) and o.get("type") == "rect"}
+    step_x = st.session_state[_SS_SNAP_X]
+    y_mode = st.session_state[_SS_SNAP_Y]
+    new_list: List[Dict[str, Any]] = []
+
+    for o in st.session_state[_SS_OBJS]:
+        pfid = o.get("pfid")
+        base = dict(o)
+        if pfid in by_id:
+            src = by_id[pfid]
+            name = src.get("name") or base.get("name") or "Custom"
+            w = int(round((src.get("width")  or base.get("width")  or 0) * (src.get("scaleX") or 1)))
+            h = int(round((src.get("height") or base.get("height") or 0) * (src.get("scaleY") or 1)))
+            w,h = _fix_size(name, w, h)
+            x = int(round(src.get("left") or base.get("left") or 0))
+            y = int(round(src.get("top")  or base.get("top")  or 0))
+            x,y = _snap_xy(name, x, y, w, h, step_x, y_mode)
+            base.update({"left": x, "top": y, "width": w, "height": h, "name": name})
+        # selectable/evented bleibt wie in base (Lock-Status)
+        new_list.append(base)
+
+    st.session_state[_SS_OBJS] = new_list
+
+# ---------------- Y-Ausrichten per Buttons (L/M/R) ----------------
 def _align(scope_last: bool, pos: str):
     _ensure()
     if st.session_state[_SS_LOCKED]: return
     objs = st.session_state[_SS_OBJS]
     if not objs: return
-    step = st.session_state[_SS_SNAP_CM]
+    step_x = st.session_state[_SS_SNAP_X]
+    y_mode = "auto_lmr"  # forcieren
     targets = [len(objs)-1] if scope_last else list(range(len(objs)))
     for i in targets:
         o = dict(objs[i])
@@ -156,10 +177,11 @@ def _align(scope_last: bool, pos: str):
         elif pos == "right":y = TRAILER_W_CM - h
         else:               y = (TRAILER_W_CM - h)//2
         x = int(o.get("left") or 0)
-        x,y = _apply_snap_xy(x, y, w, h, step)
-        o["left"], o["top"], o["width"], o["height"] = x,y,w,h
+        x,y = _snap_xy(name, x, y, w, h, step_x, y_mode)
+        o.update({"left": x, "top": y, "width": w, "height": h})
         objs[i] = o
 
+# ---------------- Lock/Unlock ----------------
 def _set_locked(flag: bool):
     _ensure()
     st.session_state[_SS_LOCKED] = bool(flag)
@@ -171,31 +193,29 @@ def _set_locked(flag: bool):
         new.append(q)
     st.session_state[_SS_OBJS] = new
 
-# ---------- Public UI ----------
+# ---------------- Public UI ----------------
 def render_manager(title: str = "Eigene Layouts (Presets-Editor)", show_expander: bool = True) -> List[Dict[str, Any]]:
-    """Canvas NUR für Presets. Auto-Snap & stabile Positionen. Fixierbar."""
     _ensure()
     items: List[Dict[str, Any]] = []
-
     ct = st.expander(title, expanded=show_expander) if show_expander else st.container()
     with ct:
         if not _HAS_CANVAS:
             st.info("Canvas nicht verfügbar.")
             return []
 
-        # Kopf: Raster & Lock
-        ctop = st.columns([1.1, 1, 1.4])
+        # Kopf
+        ctop = st.columns([1.1, 1.1, 1.2])
         with ctop[0]:
-            snap_cm = st.number_input("Snap-Raster (cm)", 1, 100, st.session_state[_SS_SNAP_CM], step=1)
-            st.session_state[_SS_SNAP_CM] = int(snap_cm)
+            step_x = st.number_input("X-Raster (cm)", 1, 100, st.session_state[_SS_SNAP_X], step=1)
+            st.session_state[_SS_SNAP_X] = int(step_x)
         with ctop[1]:
-            locked = st.toggle("Fixiert (gesperrt)", value=st.session_state[_SS_LOCKED])
-            if locked != st.session_state[_SS_LOCKED]:
-                _set_locked(locked)
+            lock_now = st.toggle("Fixiert (gesperrt)", value=st.session_state[_SS_LOCKED])
+            if lock_now != st.session_state[_SS_LOCKED]:
+                _set_locked(lock_now)
         with ctop[2]:
-            st.caption("1 px = 1 cm · Trailer 1360×240 cm (Canvas nur für Presets)")
+            st.caption("Y: automatisch auf Links/Mitte/Rechts · 1 px = 1 cm")
 
-        # --- WICHTIG: Canvas zuerst rendern & AKTUELLEN Stand einlesen ---
+        # Canvas zuerst rendern
         initial_json = {"version": "5.2.4", "objects": st.session_state[_SS_OBJS]}
         try:
             canvas_result = st_canvas(
@@ -205,43 +225,34 @@ def render_manager(title: str = "Eigene Layouts (Presets-Editor)", show_expander
                 stroke_width=2,
                 stroke_color="#222222",
                 key="pf_canvas",
-                update_streamlit=True,      # <<< sorgt dafür, dass Drag-Positionen ankommen
+                update_streamlit=True,   # wichtig: Drag-Positionen kommen rein
                 initial_drawing=initial_json,
             )
         except Exception as e:
             st.error(f"Canvas konnte nicht initialisiert werden: {e!s}")
             return []
 
-        # Auto-Commit (inkl. Snap) des letzten Stands
+        # Aktuellen Stand stabil übernehmen (match per pfid, snap)
         if canvas_result and canvas_result.json_data:
             _commit_from_canvas(canvas_result.json_data)
 
-        # Buttons (wirken auf den frisch übernommenen Stand, daher kein „Springen“)
+        # Buttons (wirken auf den eben übernommenen Stand)
         b1,b2,b3,b4,b5 = st.columns(5)
-        with b1:
-            st.button("➕ Euro längs 120×80", on_click=_add, args=("EURO_LONG",), disabled=st.session_state[_SS_LOCKED])
-        with b2:
-            st.button("➕ Euro quer 80×120",  on_click=_add, args=("EURO_TRANS",), disabled=st.session_state[_SS_LOCKED])
-        with b3:
-            st.button("➕ Industrie 120×100", on_click=_add, args=("IND",), disabled=st.session_state[_SS_LOCKED])
-        with b4:
-            st.button("⟲ Letzte löschen", on_click=_delete_last, disabled=st.session_state[_SS_LOCKED])
-        with b5:
-            st.button("✖ Alles löschen", on_click=_delete_all, disabled=st.session_state[_SS_LOCKED])
+        with b1: st.button("➕ Euro längs 120×80", on_click=_add, args=("EURO_LONG",), disabled=st.session_state[_SS_LOCKED])
+        with b2: st.button("➕ Euro quer 80×120",  on_click=_add, args=("EURO_TRANS",), disabled=st.session_state[_SS_LOCKED])
+        with b3: st.button("➕ Industrie 120×100", on_click=_add, args=("IND",),      disabled=st.session_state[_SS_LOCKED])
+        with b4: st.button("⟲ Letzte löschen",    on_click=_delete_last,              disabled=st.session_state[_SS_LOCKED])
+        with b5: st.button("✖ Alles löschen",     on_click=_delete_all,               disabled=st.session_state[_SS_LOCKED])
 
         scope = st.radio("Ausrichten für …", ["zuletzt", "alle"], horizontal=True, index=0, disabled=st.session_state[_SS_LOCKED])
         s1,s2,s3 = st.columns(3)
-        with s1:
-            st.button("⟸ Links", on_click=_align, args=(scope=="zuletzt","left"), disabled=st.session_state[_SS_LOCKED])
-        with s2:
-            st.button("◎ Mitte", on_click=_align, args=(scope=="zuletzt","mid"),  disabled=st.session_state[_SS_LOCKED])
-        with s3:
-            st.button("⟹ Rechts",on_click=_align, args=(scope=="zuletzt","right"),disabled=st.session_state[_SS_LOCKED])
+        with s1: st.button("⟸ Links",  on_click=_align, args=(scope=="zuletzt","left"),  disabled=st.session_state[_SS_LOCKED])
+        with s2: st.button("◎ Mitte",  on_click=_align, args=(scope=="zuletzt","mid"),   disabled=st.session_state[_SS_LOCKED])
+        with s3: st.button("⟹ Rechts", on_click=_align, args=(scope=="zuletzt","right"), disabled=st.session_state[_SS_LOCKED])
 
-        # Items zurückgeben (aus persistiertem Stand)
-        objs = st.session_state[_SS_OBJS]
+        # Rückgabe (für Export)
         items = []
-        for o in objs:
+        for o in st.session_state[_SS_OBJS]:
             name = o.get("name") or "Custom"
             w,h = _fix_size(name, int(o.get("width") or 0), int(o.get("height") or 0))
             x   = int(o.get("left") or 0)
@@ -252,7 +263,7 @@ def render_manager(title: str = "Eigene Layouts (Presets-Editor)", show_expander
         total_pal = sum(1 for it in items if it["typ"] in ("Euro","Industrie"))
         st.session_state[_SS_META] = UserMeta(name="Canvas", total_pal=total_pal, heavy_count=0)
 
-        # Presets
+        # Presets (hier nur die Daten liefern; Download-Button in app.py ⇒ mit unique key!)
         col = st.columns([1,1,1])
         with col[0]:
             preset_name = st.text_input("Preset-Name", value=f"Layout {len(st.session_state[_SS_PRESETS])+1}")
@@ -265,7 +276,6 @@ def render_manager(title: str = "Eigene Layouts (Presets-Editor)", show_expander
                 st.session_state[_SS_PRESETS] = []
                 st.warning("Alle Presets gelöscht.")
 
-        # Diagnose optional
         if st.checkbox("Canvas-JSON anzeigen", value=False):
             st.json({"objects": st.session_state[_SS_OBJS]})
 
