@@ -1,11 +1,11 @@
-# custom_layouts.py — Paletten Fuchs 9.5 (robust, minimaler Canvas-Call)
+# custom_layouts.py — Paletten Fuchs 9.5 (Fixgrößen + Buttons)
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 import streamlit as st
 
-# Drawable-Canvas laden (und sauber degradieren, falls das Paket fehlt)
+# Drawable-Canvas
 try:
-    from streamlit_drawable_canvas import st_canvas  # >=0.9.3 empfohlen
+    from streamlit_drawable_canvas import st_canvas
     _HAS_CANVAS = True
 except Exception as _e:
     st.warning(f"Drawable-Canvas nicht verfügbar: {_e!s}")
@@ -14,7 +14,7 @@ except Exception as _e:
 TRAILER_LEN_CM = 1360
 TRAILER_W_CM   = 240
 
-# ---------- Meta für Presets ----------
+# ---------- Meta ----------
 @dataclass
 class UserMeta:
     name: str = "Preset 1"
@@ -22,21 +22,26 @@ class UserMeta:
     heavy_count: int = 0
 
 # Session Keys
-_SS_PRESETS   = "pf_presets"
-_SS_LAST_META = "pf_last_meta"
+_SS_PRESETS       = "pf_presets"
+_SS_LAST_META     = "pf_last_meta"
+_SS_CANVAS_OBJS   = "pf_canvas_objs"      # fabric.js objects (persistiert)
+_SS_NEXT_POS_IDX  = "pf_next_pos_idx"     # einfache Auto-Positionierung
 
 def _ensure_session():
     if _SS_PRESETS not in st.session_state:
         st.session_state[_SS_PRESETS] = []
     if _SS_LAST_META not in st.session_state:
         st.session_state[_SS_LAST_META] = UserMeta()
+    if _SS_CANVAS_OBJS not in st.session_state:
+        st.session_state[_SS_CANVAS_OBJS] = []
+    if _SS_NEXT_POS_IDX not in st.session_state:
+        st.session_state[_SS_NEXT_POS_IDX] = 0
 
 def get_active_meta() -> UserMeta:
     _ensure_session()
     return st.session_state[_SS_LAST_META]
 
 def export_all_presets_json() -> bytes:
-    """Alle gespeicherten Canvas-Presets als JSON-Bytes exportieren."""
     import json
     _ensure_session()
     try:
@@ -44,41 +49,92 @@ def export_all_presets_json() -> bytes:
     except Exception:
         return b"[]"
 
-# ---------- fabric.js JSON -> Items ----------
-def _cm_int(x: float) -> int:
-    try:
-        return int(round(float(x)))
-    except Exception:
-        return 0
+# ---------- fabric.js Helper ----------
+def _fabric_rect(x: int, y: int, w: int, h: int, label: str) -> Dict[str, Any]:
+    """Erzeuge ein Fabric-Rect mit LOCKED scaling (nur bewegen/rotieren). 1 px = 1 cm."""
+    return {
+        "type": "rect",
+        "left": x, "top": y,
+        "width": w, "height": h,
+        "fill": "rgba(0,0,0,0)",   # transparent; Farbe machen wir in app.py-Grafik
+        "stroke": "#222222", "strokeWidth": 2,
+        "angle": 0,
+        "selectable": True,
+        "evented": True,
+        "hasControls": False,      # keine Größenhandles
+        "lockScalingX": True,
+        "lockScalingY": True,
+        "lockUniScaling": True,
+        "lockRotation": False,
+        "name": label,             # eigene Kennung
+        # fabric erwartet evtl. scaleX/scaleY; auf 1 setzen
+        "scaleX": 1, "scaleY": 1,
+    }
+
+def _add_fixed_rect(kind: str):
+    """Fügt ein fixgroßes Objekt an 'nächster' Position hinzu."""
+    _ensure_session()
+    # Fixgrößen in CM
+    if kind == "EURO_LONG":
+        w, h, typ = 120, 80, "Euro"
+    elif kind == "EURO_TRANS":
+        w, h, typ = 80, 120, "Euro"
+    elif kind == "IND":
+        w, h, typ = 120, 100, "Industrie"
+    else:
+        return
+
+    # Simple Auto-Positionierung in Zeilen (ohne Überlappung – grob)
+    idx = st.session_state[_SS_NEXT_POS_IDX]
+    gap = 8
+    per_row = max(1, TRAILER_LEN_CM // (w + gap))
+    row = idx // per_row
+    col = idx % per_row
+    x = min(TRAILER_LEN_CM - w, 10 + col * (w + gap))
+    y = min(TRAILER_W_CM - h, 10 + row * (max(100, h) + gap))
+
+    obj = _fabric_rect(x, y, w, h, typ)
+    st.session_state[_SS_CANVAS_OBJS].append(obj)
+    st.session_state[_SS_NEXT_POS_IDX] += 1
+
+def _delete_last():
+    _ensure_session()
+    if st.session_state[_SS_CANVAS_OBJS]:
+        st.session_state[_SS_CANVAS_OBJS].pop()
+        st.session_state[_SS_NEXT_POS_IDX] = max(0, st.session_state[_SS_NEXT_POS_IDX]-1)
+
+def _delete_all():
+    _ensure_session()
+    st.session_state[_SS_CANVAS_OBJS] = []
+    st.session_state[_SS_NEXT_POS_IDX] = 0
 
 def _normalize_rect(obj: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Mappt fabric.js-Objekt -> cm-Koordinaten (1 px = 1 cm, da Canvas 1360x240)."""
+    """fabric.js -> cm-Koordinaten + Typ (aus 'name'). Größen sind fix hinterlegt."""
     if not isinstance(obj, dict) or obj.get("type") != "rect":
         return None
-    left   = obj.get("left", 0)
-    top    = obj.get("top", 0)
-    width  = obj.get("width", 0)
-    height = obj.get("height", 0)
-    sx = obj.get("scaleX", 1) or 1
-    sy = obj.get("scaleY", 1) or 1
+    left   = int(round((obj.get("left") or 0)))
+    top    = int(round((obj.get("top")  or 0)))
+    width  = int(round((obj.get("width")  or 0) * (obj.get("scaleX") or 1)))
+    height = int(round((obj.get("height") or 0) * (obj.get("scaleY") or 1)))
+    typ = obj.get("name") or "Custom"
 
-    w = (width  or 0) * sx
-    h = (height or 0) * sy
+    # Auf Trailer begrenzen
+    left = max(0, min(TRAILER_LEN_CM - 1, left))
+    top  = max(0, min(TRAILER_W_CM  - 1, top))
+    width  = max(1, min(TRAILER_LEN_CM - left, width))
+    height = max(1, min(TRAILER_W_CM   - top,  height))
 
-    x_cm = max(0, min(TRAILER_LEN_CM, _cm_int(left)))
-    y_cm = max(0, min(TRAILER_W_CM,   _cm_int(top)))
-    w_cm = max(1, min(TRAILER_LEN_CM - x_cm, _cm_int(w)))
-    h_cm = max(1, min(TRAILER_W_CM   - y_cm, _cm_int(h)))
+    # Typ -> exakte Fixgröße (sichert gegen manuelles Resizing; ist eh gelockt)
+    if typ == "Euro":
+        # entscheiden anhand Orientierung
+        if width < height:
+            width, height = 80, 120
+        else:
+            width, height = 120, 80
+    elif typ == "Industrie":
+        width, height = 120, 100
 
-    # Typ nur zur Anzeige/Färbung schätzen (Euro 120×80/80×120, Industrie 120×100)
-    typ = "Custom"
-    pair = (min(w_cm, h_cm), max(w_cm, h_cm))
-    if pair == (80, 120):
-        typ = "Euro"
-    elif pair == (100, 120):
-        typ = "Industrie"
-
-    return {"x_cm": x_cm, "y_cm": y_cm, "w_cm": w_cm, "h_cm": h_cm, "typ": typ}
+    return {"x_cm": left, "y_cm": top, "w_cm": width, "h_cm": height, "typ": typ}
 
 def _json_to_items(json_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     if not json_data:
@@ -87,13 +143,12 @@ def _json_to_items(json_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for o in objs:
         r = _normalize_rect(o)
-        if r:
-            out.append(r)
+        if r: out.append(r)
     return out
 
 # ---------- Canvas-Manager ----------
 def render_manager(title: str = "Eigene Layouts (Vers 1–4)", show_expander: bool = True) -> List[Dict[str, Any]]:
-    """Zeigt einen 1360×240 Canvas. Robust: minimaler st_canvas-Aufruf ohne background_* & fill_color."""
+    """Canvas mit Fixgrößen-Buttons. Bewegen erlaubt, Skalieren gesperrt. 1 px = 1 cm."""
     _ensure_session()
     items: List[Dict[str, Any]] = []
 
@@ -103,24 +158,64 @@ def render_manager(title: str = "Eigene Layouts (Vers 1–4)", show_expander: bo
             st.info("Canvas ist deaktiviert (Paket fehlt oder Fehler beim Import).")
             return []
 
-        st.caption("Rechtecke (Paletten) auf Trailer (1 px = 1 cm) zeichnen. Größen nachträglich anpassen.")
+        st.caption("Füge Paletten mit den Buttons hinzu (fixe Größe). Bewegen erlaubt, Skalieren gesperrt.")
 
-        # --- Minimal & stabil: nur essenzielle Parameter ---
+        # Button-Leiste
+        b1, b2, b3, b4, b5 = st.columns([1,1,1,1,1])
+        with b1:
+            if st.button("➕ Euro längs (120×80)", use_container_width=True):
+                _add_fixed_rect("EURO_LONG")
+        with b2:
+            if st.button("➕ Euro quer (80×120)", use_container_width=True):
+                _add_fixed_rect("EURO_TRANS")
+        with b3:
+            if st.button("➕ Industrie (120×100)", use_container_width=True):
+                _add_fixed_rect("IND")
+        with b4:
+            if st.button("⟲ Letzte löschen", use_container_width=True):
+                _delete_last()
+        with b5:
+            if st.button("✖ Alles löschen", use_container_width=True):
+                _delete_all()
+
+        # Initial-Drawing aus Session-Objekten
+        initial_json = {
+            "version": "5.2.4",
+            "objects": st.session_state[_SS_CANVAS_OBJS]
+        }
+
+        # Minimal & stabiler Canvas-Call (nur nötige Parameter + initial_drawing)
         try:
             canvas_result = st_canvas(
-                width=TRAILER_LEN_CM,           # 1360
-                height=TRAILER_W_CM,            # 240
-                drawing_mode="rect",
+                width=TRAILER_LEN_CM,
+                height=TRAILER_W_CM,
+                drawing_mode="transform",   # nur bewegen/selektieren
                 stroke_width=2,
                 stroke_color="#222222",
-                key="pf_canvas",                 # fester Key (ein Canvas)
+                key="pf_canvas",
                 update_streamlit=True,
+                initial_drawing=initial_json,
             )
         except Exception as e:
             st.error(f"Canvas konnte nicht initialisiert werden: {e!s}")
             return []
 
-        items = _json_to_items(canvas_result.json_data if canvas_result else None)
+        # Rückdaten übernehmen (Positionen), Größen wieder auf Fixwerte clampen
+        if canvas_result and canvas_result.json_data:
+            new_objs = canvas_result.json_data.get("objects") or []
+            # wir übernehmen neue left/top, erzwingen aber wieder Fixgrößen & Locks
+            fixed_objs: List[Dict[str, Any]] = []
+            for o in new_objs:
+                r = _normalize_rect(o)
+                if not r: 
+                    continue
+                # zurück in fabric-Objekt (Fixgröße + Locks)
+                fab = _fabric_rect(r["x_cm"], r["y_cm"], r["w_cm"], r["h_cm"], r["typ"])
+                fixed_objs.append(fab)
+            st.session_state[_SS_CANVAS_OBJS] = fixed_objs
+
+        # Items an App zurückgeben
+        items = _json_to_items({"objects": st.session_state[_SS_CANVAS_OBJS]})
 
         # Meta aktualisieren
         total_pal = sum(1 for it in items if it["typ"] in ("Euro", "Industrie"))
@@ -135,12 +230,12 @@ def render_manager(title: str = "Eigene Layouts (Vers 1–4)", show_expander: bo
                 st.session_state[_SS_PRESETS].append({"name": preset_name, "items": items})
                 st.success(f"Preset „{preset_name}“ gespeichert ({len(items)} Objekte).")
         with col[2]:
-            if st.button("Alle Presets löschen", use_container_width=True):
+            if st.button("Alle Presets löschen (Presets)", use_container_width=True):
                 st.session_state[_SS_PRESETS] = []
                 st.warning("Alle Presets gelöscht.")
 
-        # Optional: Roh-JSON zur Diagnose
+        # Diagnose optional
         if st.checkbox("Canvas-JSON anzeigen", value=False):
-            st.json(canvas_result.json_data or {})
+            st.json({"objects": st.session_state[_SS_CANVAS_OBJS]})
 
     return items
