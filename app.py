@@ -1,4 +1,4 @@
-# app.py — Paletten Fuchs 9.4 (erweitert, FIXED)
+# app.py — Paletten Fuchs 9.5 (bereinigt)
 # - Clean-Ansicht (Euro/Industrie + "Exakt bis hinten")
 # - Varianten (2×2) IMMER sichtbar, gekoppelt an die Eingaben oben
 # - JSON-Konfig: variants.json upload (beliebig viele Muster), Default-Konfig als Fallback
@@ -7,18 +7,18 @@
 # - Gewicht: Block vorne/hinten, Verteilen (Hecklast), All-Heavy
 # - BONUS: Bei aktivem Gewicht zusätzliches 2×2 mit Gewichts-Logik
 # - Achslast-Schätzung (grob): Front/Rear basierend auf Hebelmodell (Stützen an den Enden des 1360-cm-Rahmens)
+
 from custom_layouts import render_manager, get_active_meta, export_all_presets_json
 from typing import List, Dict, Optional, Tuple, Set
 import streamlit as st
 import json
-import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+import re
 
 st.set_page_config(page_title="Paletten Fuchs – Grafik & Gewicht", layout="centered")
 
 # ===================== 3) Canvas-Manager (Vers 1–4) =====================
-# Der Expander lässt Nutzer frei platzieren/speichern/laden.
 user_layout_cm = render_manager(title="Eigene Layouts (Vers 1–4)", show_expander=True)
 user_meta = get_active_meta()
 use_user_layout = len(user_layout_cm) > 0
@@ -43,14 +43,13 @@ def draw_canvas_layout(title: str, items: List[Dict], figsize: Tuple[float,float
         x, y = float(it["x_cm"]), float(it["y_cm"])
         w, h = float(it["w_cm"]), float(it["h_cm"])
         typ = it.get("typ", "")
-        # Farblogik an Farben deiner Clean-Grafik angelehnt:
-        if "Euro" in typ and (w==120 or h==120) and (w==80 or h==80):
-            # Euro: längs oder quer – leichte Farbvariante
-            face = "#d9f2d9" if (w==120 and h==80) else "#cfe8ff"
-        elif "Industrie" in typ and (w==120 or h==120) and (w==100 or h==100):
+        # Farben analog Clean-Grafik:
+        if typ == "Euro" and {w,h} == {80.0,120.0}:
+            face = "#cfe8ff" if w < h else "#d9f2d9"
+        elif typ == "Industrie" and {w,h} == {100.0,120.0}:
             face = "#ffe2b3"
         else:
-            face = "#bbbbbb"  # Custom
+            face = "#bbbbbb"
         ax.add_patch(Rectangle((x, y), w, h, facecolor=face, edgecolor="#4a4a4a", linewidth=0.9))
     ax.set_title(title, fontsize=12, pad=6)
     st.pyplot(fig)
@@ -508,7 +507,7 @@ def grog_pick_best(variants: List[Tuple[str, List[Dict]]],
     scored.sort(key=lambda t: t[2])
     return scored[:topk]
 
-# ------------------ Vordefinierte Varianten (Euro) + neue Typen ------------------
+# ------------------ Vordefinierte Euro-Typen ------------------
 def _choose_k_for_no_single(n: int, k_max: int) -> int:
     k_cap = min(k_max, n // 2)
     want = (3 - (n % 3)) % 3  # k ≡ -n (mod 3)
@@ -539,9 +538,8 @@ def build_euro_mixed_periodic(n: int, period: int, exact_tail: bool) -> List[Dic
     out: List[Dict] = []
     quota = max(1e-9, long_cnt / (k + 1))
     used_long = 0; used_k = 0
-    cursor = 0.0
     while used_long + used_k < long_cnt + k:
-        if used_k < k and (used_long + used_k) >= cursor + quota * (used_k + 1):
+        if used_k < k and (used_long + used_k) >= (used_k + 1) * quota:
             out.append(euro_row_trans2()); used_k += 1
         else:
             out.append(euro_row_long()); used_long += 1
@@ -553,7 +551,6 @@ def build_euro_alt_pattern(n: int, exact_tail: bool) -> List[Dict]:
     approx_block = max(1, n // 6)
     return build_euro_rear_2trans_block(n, approx_block=approx_block, exact_tail=False)
 
-# --- NEU: recipe / heavy_auto_rear / light_auto_mix ---
 def build_euro_recipe(rowspec: list) -> List[Dict]:
     rows: List[Dict] = []
     for r in rowspec:
@@ -596,6 +593,79 @@ def build_euro_by_type(t: str, n: int, exact_tail: bool, params: dict) -> List[D
     if t == "alt_block":       return build_euro_alt_pattern(n, exact_tail=exact_tail)
     return build_euro_all_long(n, exact_tail=exact_tail)
 
+# ===================== Varianten-Generator aus JSON =====================
+def _variant_letter(title: str, fallback_letter: str) -> str:
+    m = re.search(r"\bVar\s+([A-Z])\b", title, re.IGNORECASE)
+    if m: 
+        return m.group(1).upper()
+    m = re.search(r"\b([A-Z])\b", title)
+    if m:
+        return m.group(1).upper()
+    return fallback_letter  # z. B. A, B, C, D nach Reihenfolge
+
+def _passes_filters(v: dict, euro_n: int, ind_n: int, weight_mode: bool) -> (bool, str):
+    total = euro_n + ind_n
+    if v.get("weight_required") and not weight_mode:
+        return False, "weight_required"
+    if v.get("weight_forbidden") and weight_mode:
+        return False, "weight_forbidden"
+
+    n_exact = v.get("n_exact")
+    if n_exact is not None and total != int(n_exact):
+        return False, f"n_exact={n_exact}"
+    n_min = v.get("n_min")
+    if n_min is not None and total < int(n_min):
+        return False, f"n_min={n_min}"
+    n_max = v.get("n_max")
+    if n_max is not None and total > int(n_max):
+        return False, f"n_max={n_max}"
+
+    e_min = v.get("euro_min"); e_max = v.get("euro_max")
+    i_min = v.get("ind_min");  i_max = v.get("ind_max")
+    if e_min is not None and euro_n < int(e_min): return False, f"euro_min={e_min}"
+    if e_max is not None and euro_n > int(e_max): return False, f"euro_max={e_max}"
+    if i_min is not None and ind_n  < int(i_min): return False, f"ind_min={i_min}"
+    if i_max is not None and ind_n  > int(i_max): return False, f"ind_max={i_max}"
+
+    return True, ""
+
+def _variant_params(v: dict) -> dict:
+    return {k: v[k] for k in v.keys() if k not in ("title", "type")}
+
+def generate_variants_from_config(cfg: dict,
+                                  euro_n: int,
+                                  ind_n: int,
+                                  exact_tail: bool = False,
+                                  weight_mode: bool = False):
+    variants_cfg = cfg.get("variants", [])
+    ind_pos_map  = cfg.get("industry_position", {})
+
+    results = []
+    skipped = []
+    total_cfg = len(variants_cfg)
+    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+    for idx, v in enumerate(variants_cfg):
+        title = str(v.get("title", f"Var {letters[idx%26]}"))
+        vtype = str(v.get("type", "all_long")).strip()
+
+        ok, reason = _passes_filters(v, euro_n, ind_n, weight_mode)
+        if not ok:
+            skipped.append((title, reason))
+            continue
+
+        params = _variant_params(v)
+        euro_rows = build_euro_by_type(vtype, euro_n, exact_tail, params)
+
+        var_letter = _variant_letter(title, letters[idx % 26])
+        ind_pos = v.get("industry_position", ind_pos_map.get(var_letter, "front"))
+        ind_pos = "rear" if str(ind_pos).lower().startswith("r") else "front"
+
+        rows_v = combine_with_industry_pos(euro_rows, ind_n, pos=ind_pos)
+        results.append((title, rows_v))
+
+    return results, skipped, total_cfg
+
 # ------------------ UI ------------------
 st.title("🦊 Paletten Fuchs – Grafik & Gewicht")
 st.subheader("Clean-Ansicht (Grafik) – Euro + Industrie")
@@ -620,7 +690,6 @@ with st.expander("Gewicht & Modus (optional)", expanded=False):
                         index=0, horizontal=True)
     weight_mode = (mode != "Aus")
 
-    # All-Heavy (neu)
     all_heavy = st.toggle("Schwer: alle Paletten sind schwer", value=False,
                           help="Markiert alle Paletten als schwer (unabhängig vom Modus).")
 
@@ -646,16 +715,8 @@ with st.expander("Gewicht & Modus (optional)", expanded=False):
                                       help="Euro + Industrie zusammen; werden hecklastig verteilt.")
 
 # ===================== 5) Clean-Aufbau mit Canvas-Weiche =====================
-def layout_items_to_grid(items):
-    """Gibt Canvas-Items unverändert als 'grid' zurück (für Unicode/Infos)."""
-    return [{
-        "x_cm": it["x_cm"], "y_cm": it["y_cm"],
-        "w_cm": it["w_cm"], "h_cm": it["h_cm"],
-        "typ":  it["typ"]
-    } for it in items]
-
 if use_user_layout:
-    rows_clean: List[Dict] = []  # Algorithmus wird übersprungen
+    rows_clean: List[Dict] = []
 else:
     rows_clean: List[Dict] = []
     if euro_n > 0:
@@ -690,14 +751,12 @@ if (not use_user_layout) and weight_mode:
 
 # ===================== 6) Zeichnen (Canvas oder Clean) =====================
 if use_user_layout:
-    # Info zu Stückzahl aus Canvas (8)
-    total_from_canvas = sum(1 for it in user_layout_cm if "Euro" in it["typ"] or "Industrie" in it["typ"])
+    total_from_canvas = sum(1 for it in user_layout_cm if it.get("typ") in ("Euro","Industrie"))
     st.info(f"Canvas aktiv: {total_from_canvas} Paletten erkannt – Meta: {user_meta.name} · total={user_meta.total_pal}, heavy={user_meta.heavy_count}")
 
-    # Optionaler Unicode-Plan (nur bei Canvas sinnvoll)
     with st.expander("Unicode-Plan (Canvas)", expanded=False):
         import math
-        TRAILER_W_CM_UNI = 246  # für die Unicode-Darstellung großzügiger, wie besprochen
+        TRAILER_W_CM_UNI = 246
         CELL_CM = 20
         cols = math.ceil(TRAILER_LEN_CM / CELL_CM)
         rows = math.ceil(TRAILER_W_CM_UNI / CELL_CM)
@@ -708,7 +767,7 @@ if use_user_layout:
             y = cm_to_cells(it["y_cm"])
             w = cm_to_cells(it["w_cm"])
             h = cm_to_cells(it["h_cm"])
-            ch = "▭" if "Euro" in it["typ"] else ("▮" if "Industrie" in it["typ"] else "■")
+            ch = "▭" if it["typ"] == "Euro" else ("▮" if it["typ"] == "Industrie" else "■")
             x = min(max(1, x), cols); y = min(max(1, y), rows)
             w = max(1, min(w, cols - x + 1)); h = max(1, min(h, rows - y + 1))
             for r in range(y-1, y-1+h):
@@ -716,10 +775,8 @@ if use_user_layout:
                     grid[r][c] = ch
         st.text("\n".join("".join(row) for row in grid))
 
-    # Hauptgrafik aus Canvas
     draw_canvas_layout("Canvas: Benutzerdefiniertes Layout", user_layout_cm, figsize=(8, 1.7))
 else:
-    # 3) Zeichnen Clean (dein Originalpfad)
     title_clean = f"Clean: {euro_n} Euro ({'exakt bis hinten' if exact_tail else 'stabil'}) + {ind_n} Industrie"
     draw_graph(
         title_clean + (" – (Gewichtsansicht)" if weight_mode else ""),
@@ -734,94 +791,6 @@ else:
         heavy_rows=heavy_rows if weight_mode else None,
         show_axle_note=True
     )
-# ===================== Varianten-Generator aus JSON =====================
-import re
-
-def _variant_letter(title: str, fallback_letter: str) -> str:
-    # Versuche "Var A – ..." oder ein isoliertes A/B/C/D im Titel zu erkennen
-    m = re.search(r"\bVar\s+([A-D])\b", title)
-    if m: 
-        return m.group(1)
-    m = re.search(r"\b([A-D])\b", title)
-    if m:
-        return m.group(1)
-    return fallback_letter  # z. B. A, B, C, D nach Reihenfolge
-
-def _passes_filters(v: dict, euro_n: int, ind_n: int, weight_mode: bool) -> (bool, str):
-    total = euro_n + ind_n
-
-    # Gewichtszwang / -verbot
-    if v.get("weight_required") and not weight_mode:
-        return False, "weight_required"
-    if v.get("weight_forbidden") and weight_mode:
-        return False, "weight_forbidden"
-
-    # Total-Filter
-    n_exact = v.get("n_exact")
-    if n_exact is not None and total != int(n_exact):
-        return False, f"n_exact={n_exact}"
-    n_min = v.get("n_min")
-    if n_min is not None and total < int(n_min):
-        return False, f"n_min={n_min}"
-    n_max = v.get("n_max")
-    if n_max is not None and total > int(n_max):
-        return False, f"n_max={n_max}"
-
-    # Euro-/Industrie-spezifische Filter
-    e_min = v.get("euro_min"); e_max = v.get("euro_max")
-    i_min = v.get("ind_min");  i_max = v.get("ind_max")
-    if e_min is not None and euro_n < int(e_min): return False, f"euro_min={e_min}"
-    if e_max is not None and euro_n > int(e_max): return False, f"euro_max={e_max}"
-    if i_min is not None and ind_n  < int(i_min): return False, f"ind_min={i_min}"
-    if i_max is not None and ind_n  > int(i_max): return False, f"ind_max={i_max}"
-
-    return True, ""
-
-def _variant_params(v: dict) -> dict:
-    # Alles außer "title" und "type" als Parameter weiterreichen
-    return {k: v[k] for k in v.keys() if k not in ("title", "type")}
-
-def generate_variants_from_config(cfg: dict,
-                                  euro_n: int,
-                                  ind_n: int,
-                                  exact_tail: bool = False,
-                                  weight_mode: bool = False):
-    """Liest cfg['variants'] ein, filtert nach Regeln und baut je Variante eine (Titel, rows)-Tuple-Liste.
-       Gibt außerdem (skipped, total_cfg) für Debug zurück.
-    """
-    variants_cfg = cfg.get("variants", [])
-    ind_pos_map  = cfg.get("industry_position", {})  # z. B. {"A":"front","B":"front","C":"front","D":"rear"}
-
-    results = []
-    skipped = []
-    total_cfg = len(variants_cfg)
-
-    # Fallback-Buchstaben in Reihenfolge A, B, C, D, E, ...
-    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    for idx, v in enumerate(variants_cfg):
-        title = str(v.get("title", f"Var {letters[idx%26]}"))
-        vtype = str(v.get("type", "all_long")).strip()
-
-        ok, reason = _passes_filters(v, euro_n, ind_n, weight_mode)
-        if not ok:
-            skipped.append((title, reason))
-            continue
-
-        # Euro-Teil aufbauen (neue Typen werden in build_euro_by_type abgedeckt)
-        params = _variant_params(v)
-        euro_rows = build_euro_by_type(vtype, euro_n, exact_tail, params)
-
-        # Industrie-Position bestimmen:
-        # 1) Variante-spezifisch überschreibbar: v["industry_position"]
-        # 2) sonst Mapping über Buchstaben (A/B/C/...), abgeleitet aus Titel oder Reihenfolge
-        var_letter = _variant_letter(title, letters[idx % 26])
-        ind_pos = v.get("industry_position", ind_pos_map.get(var_letter, "front"))
-        ind_pos = "rear" if str(ind_pos).lower().startswith("r") else "front"
-
-        rows_v = combine_with_industry_pos(euro_rows, ind_n, pos=ind_pos)
-        results.append((title, rows_v))
-
-    return results, skipped, total_cfg
 
 # ------------------ Varianten-Konfiguration (JSON) ------------------
 st.markdown("##### Varianten-Konfiguration")
@@ -861,7 +830,6 @@ else:
 show_cfg_debug = st.checkbox("Konfig-Debug anzeigen", value=False,
                              help="Zeigt geladene Varianten und Gründe, warum Varianten ggf. gefiltert wurden.")
 
-# 4) Debug-/manuelle 2×2 auf Wunsch
 show_variants = st.toggle("Vordefinierte Varianten (2×2) anzeigen", value=False,
                           help="Zeigt Varianten aus der JSON-Konfig basierend auf den obigen Eingaben.")
 if show_variants:
