@@ -18,10 +18,27 @@ import re
 
 st.set_page_config(page_title="Paletten Fuchs – Grafik & Gewicht", layout="centered")
 
-# ===================== 3) Canvas-Manager (Vers 1–4) =====================
-user_layout_cm = render_manager(title="Eigene Layouts (Vers 1–4)", show_expander=True)
-user_meta = get_active_meta()
-use_user_layout = len(user_layout_cm) > 0
+# ===================== 3) Canvas-Manager (nur Presets) =====================
+use_canvas_for_presets = st.toggle("Canvas für Presets nutzen (Drag&Drop – nur zum Speichern/Laden)", value=False)
+
+user_layout_cm = []
+user_meta = None
+if use_canvas_for_presets:
+    from custom_layouts import render_manager, get_active_meta, export_all_presets_json
+    user_layout_cm = render_manager(title="Eigene Layouts (Presets-Editor)", show_expander=True)
+    user_meta = get_active_meta()
+    st.download_button(
+        "Presets (Canvas) exportieren",
+        data=export_all_presets_json(),
+        file_name="palettenfuchs_presets.json",
+        mime="application/json"
+    )
+
+# GANZ WICHTIG:
+# Canvas beeinflusst NICHT die Clean-Grafik unten.
+# Die Hauptdarstellung rechnet IMMER aus Euro/Industrie + Optionen!
+use_user_layout = False
+
 
 # ===================== 4) Helper: Canvas-Layout zeichnen =================
 TRAILER_LEN_CM = 1360
