@@ -11,6 +11,7 @@ from custom_layouts import render_manager, get_active_meta, export_all_presets_j
 from typing import List, Dict, Optional, Tuple, Set
 import streamlit as st
 import json
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
