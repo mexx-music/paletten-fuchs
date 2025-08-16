@@ -734,6 +734,94 @@ else:
         heavy_rows=heavy_rows if weight_mode else None,
         show_axle_note=True
     )
+# ===================== Varianten-Generator aus JSON =====================
+import re
+
+def _variant_letter(title: str, fallback_letter: str) -> str:
+    # Versuche "Var A – ..." oder ein isoliertes A/B/C/D im Titel zu erkennen
+    m = re.search(r"\bVar\s+([A-D])\b", title)
+    if m: 
+        return m.group(1)
+    m = re.search(r"\b([A-D])\b", title)
+    if m:
+        return m.group(1)
+    return fallback_letter  # z. B. A, B, C, D nach Reihenfolge
+
+def _passes_filters(v: dict, euro_n: int, ind_n: int, weight_mode: bool) -> (bool, str):
+    total = euro_n + ind_n
+
+    # Gewichtszwang / -verbot
+    if v.get("weight_required") and not weight_mode:
+        return False, "weight_required"
+    if v.get("weight_forbidden") and weight_mode:
+        return False, "weight_forbidden"
+
+    # Total-Filter
+    n_exact = v.get("n_exact")
+    if n_exact is not None and total != int(n_exact):
+        return False, f"n_exact={n_exact}"
+    n_min = v.get("n_min")
+    if n_min is not None and total < int(n_min):
+        return False, f"n_min={n_min}"
+    n_max = v.get("n_max")
+    if n_max is not None and total > int(n_max):
+        return False, f"n_max={n_max}"
+
+    # Euro-/Industrie-spezifische Filter
+    e_min = v.get("euro_min"); e_max = v.get("euro_max")
+    i_min = v.get("ind_min");  i_max = v.get("ind_max")
+    if e_min is not None and euro_n < int(e_min): return False, f"euro_min={e_min}"
+    if e_max is not None and euro_n > int(e_max): return False, f"euro_max={e_max}"
+    if i_min is not None and ind_n  < int(i_min): return False, f"ind_min={i_min}"
+    if i_max is not None and ind_n  > int(i_max): return False, f"ind_max={i_max}"
+
+    return True, ""
+
+def _variant_params(v: dict) -> dict:
+    # Alles außer "title" und "type" als Parameter weiterreichen
+    return {k: v[k] for k in v.keys() if k not in ("title", "type")}
+
+def generate_variants_from_config(cfg: dict,
+                                  euro_n: int,
+                                  ind_n: int,
+                                  exact_tail: bool = False,
+                                  weight_mode: bool = False):
+    """Liest cfg['variants'] ein, filtert nach Regeln und baut je Variante eine (Titel, rows)-Tuple-Liste.
+       Gibt außerdem (skipped, total_cfg) für Debug zurück.
+    """
+    variants_cfg = cfg.get("variants", [])
+    ind_pos_map  = cfg.get("industry_position", {})  # z. B. {"A":"front","B":"front","C":"front","D":"rear"}
+
+    results = []
+    skipped = []
+    total_cfg = len(variants_cfg)
+
+    # Fallback-Buchstaben in Reihenfolge A, B, C, D, E, ...
+    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    for idx, v in enumerate(variants_cfg):
+        title = str(v.get("title", f"Var {letters[idx%26]}"))
+        vtype = str(v.get("type", "all_long")).strip()
+
+        ok, reason = _passes_filters(v, euro_n, ind_n, weight_mode)
+        if not ok:
+            skipped.append((title, reason))
+            continue
+
+        # Euro-Teil aufbauen (neue Typen werden in build_euro_by_type abgedeckt)
+        params = _variant_params(v)
+        euro_rows = build_euro_by_type(vtype, euro_n, exact_tail, params)
+
+        # Industrie-Position bestimmen:
+        # 1) Variante-spezifisch überschreibbar: v["industry_position"]
+        # 2) sonst Mapping über Buchstaben (A/B/C/...), abgeleitet aus Titel oder Reihenfolge
+        var_letter = _variant_letter(title, letters[idx % 26])
+        ind_pos = v.get("industry_position", ind_pos_map.get(var_letter, "front"))
+        ind_pos = "rear" if str(ind_pos).lower().startswith("r") else "front"
+
+        rows_v = combine_with_industry_pos(euro_rows, ind_n, pos=ind_pos)
+        results.append((title, rows_v))
+
+    return results, skipped, total_cfg
 
 # ------------------ Varianten-Konfiguration (JSON) ------------------
 st.markdown("##### Varianten-Konfiguration")
