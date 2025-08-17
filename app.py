@@ -15,7 +15,33 @@ import json
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import re
+# ---- SAFE BOOT PATCH ----
+import streamlit as st
 
+# 1) Canvas global zunächst AUS, damit die App sicher lädt
+st.session_state.setdefault("_pf_disable_canvas", True)   # <- default: Canvas OFF
+
+# 2) Einmaliger „Try Canvas“-Button in der Sidebar
+with st.sidebar:
+    st.markdown("### Canvas-Komponente")
+    if st.button("Canvas jetzt ausprobieren"):
+        st.session_state["_pf_disable_canvas"] = False
+        st.rerun()
+    if st.button("Canvas wieder deaktivieren"):
+        st.session_state["_pf_disable_canvas"] = True
+        st.rerun()
+
+# 3) Falls du einen Toggle für „Canvas für Presets“ hast, danach prüfen:
+# use_canvas_for_presets = ... (dein bestehender Toggle)
+# Direkt danach:
+if st.session_state.get("_pf_disable_canvas"):
+    # Erzwinge AUS, wenn Canvas global deaktiviert ist (z. B. wegen Komponent-Error)
+    try:
+        use_canvas_for_presets
+    except NameError:
+        use_canvas_for_presets = False
+    use_canvas_for_presets = False
+# ---- /SAFE BOOT PATCH ----
 st.set_page_config(page_title="Paletten Fuchs – Grafik & Gewicht", layout="centered")
 
 # ===================== 3) Canvas-Manager (nur Presets / Drag&Drop in custom_layouts.py) =====================
