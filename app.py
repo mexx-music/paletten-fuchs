@@ -24,14 +24,6 @@ st.download_button(
     key="presets_export_btn_top",   # << NEU, eindeutig
 )
 
-# (unten / zweites Exemplar)
-st.download_button(
-    "Presets (Canvas) exportieren",
-    data=export_all_presets_json(),
-    file_name="palettenfuchs_presets.json",
-    mime="application/json",
-    key="presets_export_btn_bottom",  # << anderer Key
-)
 
 # ===================== 3) Canvas-Manager (nur Presets) =====================
 use_canvas_for_presets = st.toggle("Canvas für Presets nutzen (Drag&Drop – nur zum Speichern/Laden)", value=False)
