@@ -1,4 +1,4 @@
-# app.py — Paletten Fuchs 9.5 (bereinigt)
+# app.py — Paletten Fuchs 9.5 (Drag&Drop fix, eindeutige Keys)
 # - Clean-Ansicht (Euro/Industrie + "Exakt bis hinten")
 # - Varianten (2×2) IMMER sichtbar, gekoppelt an die Eingaben oben
 # - JSON-Konfig: variants.json upload (beliebig viele Muster), Default-Konfig als Fallback
@@ -15,128 +15,32 @@ import json
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import re
-# (oben / im Canvas-Block)
-st.download_button(
-    "Presets (Canvas) exportieren",
-    data=export_all_presets_json(),
-    file_name="palettenfuchs_presets.json",
-    mime="application/json",
-    key="presets_export_btn_top",   # << NEU, eindeutig
-)
 
+st.set_page_config(page_title="Paletten Fuchs – Grafik & Gewicht", layout="centered")
 
-# ===================== 3) Canvas-Manager (Drag&Drop – intern) =====================
+# ===================== 3) Canvas-Manager (nur Presets / Drag&Drop in custom_layouts.py) =====================
 use_canvas_for_presets = st.toggle(
     "Canvas für Presets nutzen (Drag&Drop – nur zum Speichern/Laden)",
     value=False
 )
 
+user_layout_cm: List[Dict] = []
+user_meta = None
 if use_canvas_for_presets:
-    # ===== Drag & Drop Canvas: robuste Keys + Export/Import =====
-    import uuid, json
-    from streamlit_drawable_canvas import st_canvas
-
-    # Einmal pro Session einen eindeutigen Suffix erzeugen
-    PAGE_UID = st.session_state.setdefault("_pf_page_uid", str(uuid.uuid4())[:8])
-
-    # Hilfsfunktion: eindeutige Keys erzeugen
-    def k(name: str) -> str:
-        return f"{name}_{PAGE_UID}"
-
-    # ---------- Paletten-Objekt-Builder (Beispielwerte) ----------
-    def pallet_obj(x, y, w, h, label, fill="#D9D9D9"):
-        # fabric.js-kompatibles Rect-Objekt (für streamlit-drawable-canvas)
-        return {
-            "type": "rect",
-            "left": x,
-            "top": y,
-            "width": w,
-            "height": h,
-            "fill": fill,
-            "stroke": "#333333",
-            "strokeWidth": 1,
-            "rx": 6,
-            "ry": 6,
-            "selectable": True,
-            "hasControls": False,
-            "name": label
-        }
-
-    # ---------- Initiales Layout (falls noch nichts in Session) ----------
-    if "pf_layout_objects" not in st.session_state:
-        trailer_w, trailer_h = 960, 420   # Canvas-Größe (px) – an dein UI anpassen
-        st.session_state.pf_layout_objects = [
-            # Trailer-Rahmen (optional)
-            {
-                "type": "rect", "left": 0, "top": 0, "width": trailer_w, "height": trailer_h,
-                "fill": None, "stroke": "#888888", "strokeWidth": 2, "rx": 12, "ry": 12,
-                "selectable": False, "evented": False, "name": "TrailerFrame"
-            },
-            # Beispielpaletten
-            pallet_obj(40, 40, 120, 80, "EU-1", "#CFE8FF"),
-            pallet_obj(180, 40, 120, 80, "EU-2", "#CFE8FF"),
-            pallet_obj(320, 40, 120, 80, "EU-3", "#CFE8FF"),
-        ]
-
-    # ---------- Canvas rendern (Drag & Drop per transform) ----------
-    canvas_result = st_canvas(
-        key=k("pf_canvas"),
-        background_color="#FFFFFF",
-        height=520,
-        width=980,
-        initial_drawing={
-            "version": "5.2.4",
-            "objects": st.session_state.pf_layout_objects
-        },
-        drawing_mode="transform",        # bewegen/skalieren vorhandener Objekte
-        update_streamlit=True,
-    )
-
-    # ---------- Änderungen aus dem Canvas übernehmen ----------
-    if canvas_result and canvas_result.json_data:
-        try:
-            st.session_state.pf_layout_objects = canvas_result.json_data.get("objects", [])
-        except Exception:
-            pass  # fail-safe
-
-    # ---------- Export / Import (eindeutige Keys!) ----------
-    preset_payload = json.dumps(
-        {"layout": st.session_state.pf_layout_objects},
-        ensure_ascii=False, indent=2
-    )
-
+    user_layout_cm = render_manager(title="Eigene Layouts (Presets-Editor)", show_expander=True)
+    user_meta = get_active_meta()
     st.download_button(
         "Presets (Canvas) exportieren",
-        data=preset_payload,
+        data=export_all_presets_json(),
         file_name="palettenfuchs_presets.json",
         mime="application/json",
-        key=k("pf_download_presets"),
+        key="presets_export_btn_canvas"  # eindeutiger Key → kein Duplicate-Error
     )
-
-    uploaded = st.file_uploader(
-        "Presets (Canvas) importieren",
-        type=["json"],
-        key=k("pf_upload_presets"),
-    )
-    if uploaded is not None:
-        try:
-            data = json.load(uploaded)
-            layout = data.get("layout", [])
-            if isinstance(layout, list) and layout:
-                st.session_state.pf_layout_objects = layout
-                st.success("Presets importiert.")
-                st.rerun()
-            else:
-                st.warning("JSON ohne gültiges 'layout' gefunden.")
-        except Exception as e:
-            st.error(f"Import fehlgeschlagen: {e}")
 
 # GANZ WICHTIG:
 # Canvas beeinflusst NICHT die Clean-Grafik unten.
 # Die Hauptdarstellung rechnet IMMER aus Euro/Industrie + Optionen!
 use_user_layout = False
-
-
 
 # ===================== 4) Helper: Canvas-Layout zeichnen =================
 TRAILER_LEN_CM = 1360
@@ -1061,7 +965,8 @@ st.download_button(
     "Presets (Canvas) exportieren",
     data=export_all_presets_json(),
     file_name="palettenfuchs_presets.json",
-    mime="application/json"
+    mime="application/json",
+    key="presets_export_btn_final"  # eigener Key, damit keine Kollision mit dem Canvas-Button
 )
 
 st.caption(
