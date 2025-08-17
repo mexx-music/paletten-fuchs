@@ -7,7 +7,26 @@
 # - Gewicht: Block vorne/hinten, Verteilen (Hecklast), All-Heavy
 # - BONUS: Bei aktivem Gewicht zusätzliches 2×2 mit Gewichts-Logik
 # - Achslast-Schätzung (grob): Front/Rear basierend auf Hebelmodell (Stützen an den Enden des 1360-cm-Rahmens)
+# --- MUSS ganz oben stehen, VOR jedem anderen st.* Aufruf / Import, der st.* nutzt ---
+import streamlit as st
+st.set_page_config(page_title="Paletten Fuchs – Grafik & Gewicht", layout="centered")
 
+# (Optional) Safe-Boot: Canvas standardmäßig aus, per Sidebar schaltbar
+st.session_state.setdefault("_pf_disable_canvas", False)
+with st.sidebar:
+    st.markdown("### Canvas-Komponente")
+    if st.button("Canvas deaktivieren"):
+        st.session_state["_pf_disable_canvas"] = True
+        st.rerun()
+    if st.button("Canvas aktivieren"):
+        st.session_state["_pf_disable_canvas"] = False
+        st.rerun()
+
+# jetzt ERST die restlichen Imports:
+from custom_layouts import render_manager, get_active_meta, export_all_presets_json
+import json, matplotlib.pyplot as plt, re
+from typing import List, Dict, Optional, Tuple, Set
+from matplotlib.patches import Rectangle
 from custom_layouts import render_manager, get_active_meta, export_all_presets_json
 from typing import List, Dict, Optional, Tuple, Set
 import streamlit as st
